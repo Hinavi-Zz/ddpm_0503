@@ -1,0 +1,29 @@
+datasets:
+  - year: 2013
+    path: dataset/hn13_all.sas7bdat
+  - year: 2014
+    path: dataset/hn14_all.sas7bdat
+  - year: 2015
+    path: dataset/hn15_all.sas7bdat
+  - year: 2016
+    path: dataset/hn16_all.sas7bdat
+  - year: 2017
+    path: dataset/hn17_all.sas7bdat
+  - year: 2018
+    path: dataset/hn18_all.sas7bdat
+  - year: 2019
+    path: dataset/hn19_all.sas7bdat
+  - year: 2020
+    path: dataset/hn20_all.sas7bdat
+  - year: 2021
+    path: dataset/hn21_all.sas7bdat
+  - year: 2022
+    path: dataset/hn22_all.sas7bdat
+  - year: 2023
+    path: dataset/hn23_all.sas7bdat
+  - year: 2024
+    path: dataset/hn24_all.sas7bdat
+metadata_path: metadata.csv
+skip_years_path: skip_years.csv
+input_variables_path: input_variables.txt
+output_variables_path: output_variables.txt

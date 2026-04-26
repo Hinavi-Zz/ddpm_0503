@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+env/
+
+dataset/
+hn*_all.csv
+
+preprocessed/*.npy
+
+*.pdf
+metadata_before_split.csv
+metadata_split.csv
+.DS_Store
+Thumbs.db
