@@ -201,26 +201,39 @@ def _normalize_code(value: object) -> tuple[str, str] | None:
     return ("num", _format_decimal(parsed))
 
 
-def _preprocess_source_categorical(data: pd.Series, classes: list[object]) -> pd.DataFrame:
-    """One-hot encode 1D source categorical data, using the last column for missing values."""
+def _preprocess_categorical_with_flag(
+    data: pd.Series,
+    classes: list[object],
+    flags: list[object],
+) -> pd.DataFrame:
+    """One-hot encode categorical data with a single leading flag/missing column."""
     class_codes = [_normalize_code(value) for value in classes]
+    flag_codes = {
+        code
+        for value in flags
+        if (code := _normalize_code(value)) is not None
+    }
     if any(code is None for code in class_codes):
         raise ValueError("classes must not contain missing or blank values.")
     if len(set(class_codes)) != len(class_codes):
         raise ValueError("classes must not contain duplicate values.")
+    if set(class_codes) & flag_codes:
+        raise ValueError("classes and flags must not overlap for categorical preprocessing.")
 
     class_to_index = {code: index for index, code in enumerate(class_codes)}
-    columns = [str(value) for value in classes] + ["missing"]
+    columns = ["flag"] + [str(value) for value in classes]
     normalized = data.map(_normalize_code)
     class_indices = normalized.map(class_to_index)
-    missing_mask = normalized.isna()
-    invalid_mask = class_indices.isna() & ~missing_mask
-    missing_or_invalid_mask = missing_mask | invalid_mask
+    flag_mask = normalized.isna() | normalized.isin(flag_codes) | class_indices.isna()
 
     encoded = np.zeros((len(data), len(classes) + 1), dtype=np.int8)
-    valid_positions = np.flatnonzero(~missing_or_invalid_mask.to_numpy())
-    encoded[valid_positions, class_indices.dropna().astype(int).to_numpy()] = 1
-    encoded[np.flatnonzero(missing_or_invalid_mask.to_numpy()), len(classes)] = 1
+    encoded[np.flatnonzero(flag_mask.to_numpy())] = np.array(
+        [1] + [0] * len(classes),
+        dtype=np.int8,
+    )
+    valid_mask = ~flag_mask
+    valid_positions = np.flatnonzero(valid_mask.to_numpy())
+    encoded[valid_positions, class_indices[valid_mask].astype(int).to_numpy() + 1] = 1
 
     return pd.DataFrame(encoded, index=data.index, columns=columns)
 
@@ -253,52 +266,31 @@ def _summarize_raw_values(values: pd.Series) -> dict[str, object]:
 def _preprocess_source_numerical(
     data: pd.Series,
     flags: list[object],
-    bottom: object,
-    top: object,
 ) -> tuple[pd.DataFrame, pd.Series, dict[str, object]]:
-    """Preprocess 1D source numerical data into indicators and a continuous value."""
+    """Preprocess 1D source numerical data into a flag indicator and continuous value."""
     numeric = pd.to_numeric(data, errors="coerce")
     missing_mask = numeric.isna()
 
-    parsed_flags = [
-        (_format_decimal(parsed), float(parsed))
+    flag_values = [
+        float(parsed)
         for flag in flags
         if (parsed := _to_decimal(flag)) is not None
     ]
-    flag_values = [value for _, value in parsed_flags]
     flag_mask = numeric.isin(flag_values) if flag_values else pd.Series(False, index=data.index)
-    bottom_value = float(bottom) if _to_decimal(bottom) is not None else None
-    top_value = float(top) if _to_decimal(top) is not None else None
-    below_bottom_mask = (
-        (numeric <= bottom_value) & ~flag_mask & ~missing_mask
-        if bottom_value is not None
-        else pd.Series(False, index=data.index)
-    )
-    above_top_mask = (
-        (numeric >= top_value) & ~flag_mask & ~missing_mask & ~below_bottom_mask
-        if top_value is not None
-        else pd.Series(False, index=data.index)
+    flag_or_missing_mask = missing_mask | flag_mask
+
+    categorical = pd.DataFrame(
+        {"flag": flag_or_missing_mask.to_numpy(dtype=np.int8)},
+        index=data.index,
     )
 
-    categorical_columns = (
-        [f"flag_{label}" for label, _ in parsed_flags]
-        + ["le_bottom", "ge_top", "missing"]
-    )
-    categorical = np.zeros((len(data), len(categorical_columns)), dtype=np.int8)
-
-    for index, flag in enumerate(flag_values):
-        categorical[:, index] = (numeric == flag).to_numpy(dtype=np.int8)
-    categorical[:, len(flag_values)] = below_bottom_mask.to_numpy(dtype=np.int8)
-    categorical[:, len(flag_values) + 1] = above_top_mask.to_numpy(dtype=np.int8)
-    categorical[:, len(flag_values) + 2] = missing_mask.to_numpy(dtype=np.int8)
-
-    valid_continuous_mask = ~missing_mask & ~flag_mask
+    valid_continuous_mask = ~flag_or_missing_mask
     summary = _summarize_raw_values(numeric[valid_continuous_mask])
     continuous = numeric.astype("float32")
     continuous.loc[~valid_continuous_mask] = 0.0
 
     return (
-        pd.DataFrame(categorical, index=data.index, columns=categorical_columns),
+        categorical,
         continuous,
         summary,
     )
@@ -322,9 +314,10 @@ def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> 
 
         data = dataset[name]
         if variable_type == "categorical":
-            categorical = _preprocess_source_categorical(
+            categorical = _preprocess_categorical_with_flag(
                 data,
-                _merge_codes(row.classes, row.flags),
+                _split_codes(row.classes),
+                _split_codes(row.flags),
             )
             for column in categorical.columns:
                 column_info.append(
@@ -334,6 +327,7 @@ def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> 
                         "source_type": "categorical",
                         "feature_type": "one_hot",
                         "meaning": column,
+                        "mask_rule": "flag is 1 when value is metadata flag, missing, or outside classes",
                     }
                 )
             categorical = categorical.add_prefix(f"{name}__")
@@ -342,8 +336,6 @@ def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> 
             categorical, continuous, summary = _preprocess_source_numerical(
                 data,
                 _split_codes(row.flags),
-                row.bottom,
-                row.top,
             )
             for column in categorical.columns:
                 column_info.append(
@@ -353,6 +345,7 @@ def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> 
                         "source_type": "numerical",
                         "feature_type": "indicator",
                         "meaning": column,
+                        "mask_rule": "1 when value is metadata flag or missing",
                     }
                 )
             categorical = categorical.add_prefix(f"{name}__")
@@ -364,6 +357,7 @@ def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> 
                     "source_type": "numerical",
                     "feature_type": "continuous",
                     "meaning": "raw_value",
+                    "mask_rule": "value is 0 when flag is 1",
                 }
             )
             raw_value_summary.append(
@@ -423,64 +417,27 @@ def _preprocess_target_categorical(
     data: pd.Series,
     classes: list[object],
     flags: list[object],
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """One-hot encode categorical targets and mask flags/missing rows."""
-    class_codes = [_normalize_code(value) for value in classes]
-    flag_codes = {
-        code
-        for value in flags
-        if (code := _normalize_code(value)) is not None
-    }
-    if any(code is None for code in class_codes):
-        raise ValueError("classes must not contain missing or blank values.")
-    if len(set(class_codes)) != len(class_codes):
-        raise ValueError("classes must not contain duplicate values.")
-    if set(class_codes) & flag_codes:
-        raise ValueError("classes and flags must not overlap for target preprocessing.")
-
-    class_to_index = {code: index for index, code in enumerate(class_codes)}
-    columns = [str(value) for value in classes]
-    normalized = data.map(_normalize_code)
-    class_indices = normalized.map(class_to_index)
-    missing_mask = normalized.isna()
-    flag_mask = normalized.isin(flag_codes) if flag_codes else pd.Series(False, index=data.index)
-    valid_mask = class_indices.notna() & ~missing_mask & ~flag_mask
-
-    target = np.zeros((len(data), len(classes)), dtype=np.float32)
-    mask = np.zeros((len(data), len(classes)), dtype=np.float32)
-    valid_positions = np.flatnonzero(valid_mask.to_numpy())
-    target[valid_positions, class_indices[valid_mask].astype(int).to_numpy()] = 1.0
-    mask[valid_positions, :] = 1.0
-
-    return (
-        pd.DataFrame(target, index=data.index, columns=columns),
-        pd.DataFrame(mask, index=data.index, columns=columns),
-    )
+) -> pd.DataFrame:
+    """One-hot encode categorical targets with the same representation as source."""
+    return _preprocess_categorical_with_flag(data, classes, flags).astype("float32")
 
 
 def _preprocess_target_numerical(
     data: pd.Series,
     flags: list[object],
-) -> tuple[pd.Series, pd.Series, dict[str, object]]:
-    """Keep numerical targets as raw values and mask flags/missing rows."""
-    numeric = pd.to_numeric(data, errors="coerce")
-    missing_mask = numeric.isna()
-
-    flag_values = [
-        float(parsed)
-        for flag in flags
-        if (parsed := _to_decimal(flag)) is not None
-    ]
-    flag_mask = numeric.isin(flag_values) if flag_values else pd.Series(False, index=data.index)
-    train_mask = ~missing_mask & ~flag_mask
-
-    summary = _summarize_raw_values(numeric[train_mask])
-    target = numeric.astype("float32")
-    target.loc[~train_mask] = 0.0
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Keep numerical targets with the same flag/value representation as source."""
+    flag, value, summary = _preprocess_source_numerical(data, flags)
+    target = pd.DataFrame(
+        {
+            "flag": flag["flag"].to_numpy(dtype=np.float32),
+            "value": value.to_numpy(dtype=np.float32),
+        },
+        index=data.index,
+    )
 
     return (
         target,
-        train_mask.astype("float32"),
         summary,
     )
 
@@ -488,15 +445,14 @@ def _preprocess_target_numerical(
 def preprocess_target_dataset(
     dataset: pd.DataFrame,
     metadata: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Preprocess target variables and return target and gradient mask arrays."""
+) -> pd.DataFrame:
+    """Preprocess target variables."""
     required_columns = ["variable_name", "type", "classes", "flags", "bottom", "top"]
     missing_columns = [col for col in required_columns if col not in metadata.columns]
     if missing_columns:
         raise ValueError(f"Metadata is missing columns: {missing_columns}")
 
     target_parts: list[pd.DataFrame] = []
-    mask_parts: list[pd.DataFrame] = []
     column_info: list[dict[str, object]] = []
     raw_value_summary: list[dict[str, object]] = []
 
@@ -508,7 +464,7 @@ def preprocess_target_dataset(
 
         data = dataset[name]
         if variable_type == "categorical":
-            target, mask = _preprocess_target_categorical(
+            target = _preprocess_target_categorical(
                 data,
                 _split_codes(row.classes),
                 _split_codes(row.flags),
@@ -521,33 +477,31 @@ def preprocess_target_dataset(
                         "source_type": "categorical",
                         "target_type": "one_hot",
                         "meaning": column,
-                        "mask_rule": "0 when value is flag, missing, or outside classes",
+                        "mask_rule": "always 1; flag is represented as a target class",
                     }
                 )
             target_parts.append(target.add_prefix(f"{name}__"))
-            mask_parts.append(mask.add_prefix(f"{name}__"))
         elif variable_type == "numerical":
-            target, mask, summary = _preprocess_target_numerical(
+            target, summary = _preprocess_target_numerical(
                 data,
                 _split_codes(row.flags),
             )
-            column_name = f"{name}__value"
-            target_parts.append(target.rename(column_name).to_frame())
-            mask_parts.append(mask.rename(column_name).to_frame())
-            column_info.append(
-                {
-                    "column_name": column_name,
-                    "source_variable": name,
-                    "source_type": "numerical",
-                    "target_type": "continuous",
-                    "meaning": "raw_value",
-                    "mask_rule": "0 when value is flag or missing; bottom/top do not affect mask",
-                }
-            )
+            target_parts.append(target.add_prefix(f"{name}__"))
+            for column in target.columns:
+                column_info.append(
+                    {
+                        "column_name": f"{name}__{column}",
+                        "source_variable": name,
+                        "source_type": "numerical",
+                        "target_type": "indicator" if column == "flag" else "continuous",
+                        "meaning": column if column == "flag" else "raw_value",
+                        "mask_rule": "always 1; flag/value representation matches source",
+                    }
+                )
             raw_value_summary.append(
                 {
                     "source_variable": name,
-                    "column_name": column_name,
+                    "column_name": f"{name}__value",
                     "role": "target",
                     **summary,
                 }
@@ -559,28 +513,25 @@ def preprocess_target_dataset(
         empty = pd.DataFrame(index=dataset.index)
         empty.attrs["column_info"] = pd.DataFrame()
         empty.attrs["raw_value_summary"] = pd.DataFrame()
-        return empty, empty.copy()
+        return empty
 
     target = pd.concat(target_parts, axis=1)
-    mask = pd.concat(mask_parts, axis=1)
     for index, info in enumerate(column_info):
         info["column_index"] = index
     target.attrs["column_info"] = pd.DataFrame(column_info)
     target.attrs["raw_value_summary"] = pd.DataFrame(raw_value_summary)
-    return target, mask
+    return target
 
 
 def save_preprocessed_target(
     processed_target: pd.DataFrame,
-    target_mask: pd.DataFrame,
     output_dir: str | Path,
 ) -> None:
-    """Save preprocessed targets, masks, and memo files."""
+    """Save preprocessed targets and memo files."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     np.save(output_dir / "target_array.npy", processed_target.to_numpy(dtype=np.float32))
-    np.save(output_dir / "target_mask.npy", target_mask.to_numpy(dtype=np.float32))
     _write_preprocess_csv(
         processed_target.attrs.get("column_info", pd.DataFrame()),
         output_dir / "target_columns.csv",
@@ -594,6 +545,9 @@ def save_preprocessed_target(
     ]:
         if stale_quantile_lookup.exists():
             stale_quantile_lookup.unlink()
+    stale_target_mask = output_dir / "target_mask.npy"
+    if stale_target_mask.exists():
+        stale_target_mask.unlink()
 
 
 def validate_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -811,10 +765,9 @@ def main() -> None:
     print("Saved preprocessed source files to: preprocessed")
 
     if target_metadata is not None:
-        processed_target, target_mask = preprocess_target_dataset(dataset, target_metadata)
-        save_preprocessed_target(processed_target, target_mask, "preprocessed")
+        processed_target = preprocess_target_dataset(dataset, target_metadata)
+        save_preprocessed_target(processed_target, "preprocessed")
         print(f"Preprocessed target shape: {processed_target.shape}")
-        print(f"Target mask shape: {target_mask.shape}")
         print("Saved preprocessed target files to: preprocessed")
 
 
