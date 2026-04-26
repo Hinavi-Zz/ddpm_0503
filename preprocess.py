@@ -201,8 +201,8 @@ def _normalize_code(value: object) -> tuple[str, str] | None:
     return ("num", _format_decimal(parsed))
 
 
-def _preprocess_input_categorical(data: pd.Series, classes: list[object]) -> pd.DataFrame:
-    """One-hot encode 1D input categorical data, using the last column for missing values."""
+def _preprocess_source_categorical(data: pd.Series, classes: list[object]) -> pd.DataFrame:
+    """One-hot encode 1D source categorical data, using the last column for missing values."""
     class_codes = [_normalize_code(value) for value in classes]
     if any(code is None for code in class_codes):
         raise ValueError("classes must not contain missing or blank values.")
@@ -225,91 +225,38 @@ def _preprocess_input_categorical(data: pd.Series, classes: list[object]) -> pd.
     return pd.DataFrame(encoded, index=data.index, columns=columns)
 
 
-def _fit_quantile_centered_transform(values: pd.Series) -> tuple[dict[str, object], pd.DataFrame]:
-    """Fit an empirical quantile transform with average-rank ties and center at 0."""
+def _summarize_raw_values(values: pd.Series) -> dict[str, object]:
+    """Return summary metadata for raw continuous values."""
     numeric = pd.to_numeric(values, errors="coerce").dropna()
     if numeric.empty:
-        return (
-            {
-                "method": "empirical_quantile_centered",
-                "n_values": 0,
-                "n_unique_values": 0,
-                "min_value": np.nan,
-                "max_value": np.nan,
-                "median_value": np.nan,
-                "center_value": 0.0,
-            },
-            pd.DataFrame(columns=["source_value", "quantile", "transformed_value"]),
-        )
-
-    counts = numeric.value_counts(sort=False).sort_index()
-    source_values = counts.index.to_numpy(dtype=float)
-    counts_array = counts.to_numpy(dtype=np.int64)
-    n_values = int(counts_array.sum())
-
-    cumulative_counts = np.cumsum(counts_array)
-    start_ranks = cumulative_counts - counts_array + 1
-    end_ranks = cumulative_counts
-    average_ranks = (start_ranks + end_ranks) / 2
-
-    if n_values == 1:
-        quantiles = np.array([0.5], dtype=np.float64)
-    else:
-        quantiles = (average_ranks - 1) / (n_values - 1)
-
-    transformed_values = quantiles - 0.5
-    lookup = pd.DataFrame(
-        {
-            "source_value": source_values,
-            "quantile": quantiles,
-            "transformed_value": transformed_values,
+        return {
+            "method": "raw_value",
+            "n_values": 0,
+            "n_unique_values": 0,
+            "min_value": np.nan,
+            "max_value": np.nan,
+            "median_value": np.nan,
+            "placeholder_value": 0.0,
         }
-    )
 
-    return (
-        {
-            "method": "empirical_quantile_centered",
-            "n_values": n_values,
-            "n_unique_values": int(len(source_values)),
-            "min_value": float(numeric.min()),
-            "max_value": float(numeric.max()),
-            "median_value": float(numeric.median()),
-            "center_value": 0.0,
-        },
-        lookup,
-    )
+    return {
+        "method": "raw_value",
+        "n_values": int(numeric.shape[0]),
+        "n_unique_values": int(numeric.nunique(dropna=True)),
+        "min_value": float(numeric.min()),
+        "max_value": float(numeric.max()),
+        "median_value": float(numeric.median()),
+        "placeholder_value": 0.0,
+    }
 
 
-def _apply_quantile_centered_transform(
-    values: pd.Series,
-    lookup: pd.DataFrame,
-) -> pd.Series:
-    """Apply a fitted centered quantile transform with linear interpolation."""
-    numeric = pd.to_numeric(values, errors="coerce")
-    if lookup.empty:
-        return pd.Series(0.0, index=values.index, dtype="float32")
-
-    source_values = lookup["source_value"].to_numpy(dtype=np.float64)
-    transformed_values = lookup["transformed_value"].to_numpy(dtype=np.float64)
-    numeric_values = numeric.to_numpy(dtype=np.float64)
-    transformed = np.interp(
-        numeric_values,
-        source_values,
-        transformed_values,
-        left=transformed_values[0],
-        right=transformed_values[-1],
-    )
-    transformed[np.isnan(numeric_values)] = 0.0
-    return pd.Series(transformed, index=values.index, dtype="float32")
-
-
-def _preprocess_input_numerical(
+def _preprocess_source_numerical(
     data: pd.Series,
     flags: list[object],
     bottom: object,
     top: object,
-) -> tuple[pd.DataFrame, pd.Series, dict[str, object], pd.DataFrame]:
-    """Preprocess 1D input numerical data into indicators and a continuous value."""
+) -> tuple[pd.DataFrame, pd.Series, dict[str, object]]:
+    """Preprocess 1D source numerical data into indicators and a continuous value."""
     numeric = pd.to_numeric(data, errors="coerce")
     missing_mask = numeric.isna()
 
@@ -345,21 +292,20 @@ def _preprocess_input_numerical(
     categorical[:, len(flag_values) + 1] = above_top_mask.to_numpy(dtype=np.int8)
     categorical[:, len(flag_values) + 2] = missing_mask.to_numpy(dtype=np.int8)
 
-    fit_source = numeric[~missing_mask & ~flag_mask]
-    constants, lookup = _fit_quantile_centered_transform(fit_source)
-    continuous = _apply_quantile_centered_transform(numeric, lookup)
-    continuous[missing_mask | flag_mask] = 0.0
+    valid_continuous_mask = ~missing_mask & ~flag_mask
+    summary = _summarize_raw_values(numeric[valid_continuous_mask])
+    continuous = numeric.astype("float32")
+    continuous.loc[~valid_continuous_mask] = 0.0
 
     return (
         pd.DataFrame(categorical, index=data.index, columns=categorical_columns),
         continuous,
-        constants,
-        lookup,
+        summary,
     )
 
 
-def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFrame:
-    """Preprocess input variables described in metadata."""
+def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFrame:
+    """Preprocess source variables described in metadata."""
     required_columns = ["variable_name", "type", "classes", "flags", "bottom", "top"]
     missing_columns = [col for col in required_columns if col not in metadata.columns]
     if missing_columns:
@@ -367,8 +313,7 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
 
     processed_parts: list[pd.DataFrame] = []
     column_info: list[dict[str, object]] = []
-    normalization_constants: list[dict[str, object]] = []
-    quantile_lookup_parts: list[pd.DataFrame] = []
+    raw_value_summary: list[dict[str, object]] = []
     for row in metadata.itertuples(index=False):
         name = row.variable_name
         variable_type = row.type
@@ -377,7 +322,7 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
 
         data = dataset[name]
         if variable_type == "categorical":
-            categorical = _preprocess_input_categorical(
+            categorical = _preprocess_source_categorical(
                 data,
                 _merge_codes(row.classes, row.flags),
             )
@@ -394,7 +339,7 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
             categorical = categorical.add_prefix(f"{name}__")
             processed_parts.append(categorical)
         elif variable_type == "numerical":
-            categorical, continuous, constants, lookup = _preprocess_input_numerical(
+            categorical, continuous, summary = _preprocess_source_numerical(
                 data,
                 _split_codes(row.flags),
                 row.bottom,
@@ -418,23 +363,17 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
                     "source_variable": name,
                     "source_type": "numerical",
                     "feature_type": "continuous",
-                    "meaning": "quantile_centered_value",
+                    "meaning": "raw_value",
                 }
             )
-            normalization_constants.append(
+            raw_value_summary.append(
                 {
                     "source_variable": name,
                     "column_name": f"{name}__value",
-                    "role": "input",
-                    **constants,
+                    "role": "source",
+                    **summary,
                 }
             )
-            if not lookup.empty:
-                lookup = lookup.copy()
-                lookup.insert(0, "source_variable", name)
-                lookup.insert(1, "column_name", f"{name}__value")
-                lookup.insert(2, "role", "input")
-                quantile_lookup_parts.append(lookup)
             processed_parts.extend([categorical, continuous])
         elif variable_type == "pass":
             continue
@@ -446,56 +385,46 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
     for index, info in enumerate(column_info):
         info["column_index"] = index
     processed.attrs["column_info"] = pd.DataFrame(column_info)
-    processed.attrs["normalization_constants"] = pd.DataFrame(normalization_constants)
-    processed.attrs["quantile_lookup"] = (
-        pd.concat(quantile_lookup_parts, ignore_index=True)
-        if quantile_lookup_parts
-        else pd.DataFrame(
-            columns=[
-                "source_variable",
-                "column_name",
-                "role",
-                "source_value",
-                "quantile",
-                "transformed_value",
-            ]
-        )
-    )
+    processed.attrs["raw_value_summary"] = pd.DataFrame(raw_value_summary)
     return processed
 
 
-def save_preprocessed_input(processed_input: pd.DataFrame, output_dir: str | Path) -> None:
-    """Save preprocessed input array and memo files."""
+def _write_preprocess_csv(data: pd.DataFrame, path: Path) -> None:
+    data.to_csv(
+        path,
+        index=False,
+        encoding="utf-8-sig",
+        lineterminator="\n",
+    )
+
+
+def save_preprocessed_source(processed_source: pd.DataFrame, output_dir: str | Path) -> None:
+    """Save preprocessed source array and memo files."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    np.save(output_dir / "input_array.npy", processed_input.to_numpy(dtype=np.float32))
-    processed_input.attrs.get("column_info", pd.DataFrame()).to_csv(
-        output_dir / "input_columns.csv",
-        index=False,
-        encoding="utf-8-sig",
-        lineterminator="\n",
+    np.save(output_dir / "source_array.npy", processed_source.to_numpy(dtype=np.float32))
+    _write_preprocess_csv(
+        processed_source.attrs.get("column_info", pd.DataFrame()),
+        output_dir / "source_columns.csv",
     )
-    processed_input.attrs.get("normalization_constants", pd.DataFrame()).to_csv(
-        output_dir / "input_normalization_constants.csv",
-        index=False,
-        encoding="utf-8-sig",
-        lineterminator="\n",
+    _write_preprocess_csv(
+        processed_source.attrs.get("raw_value_summary", pd.DataFrame()),
+        output_dir / "source_raw_value_summary.csv",
     )
-    processed_input.attrs.get("quantile_lookup", pd.DataFrame()).to_csv(
-        output_dir / "input_quantile_lookup.csv",
-        index=False,
-        encoding="utf-8-sig",
-        lineterminator="\n",
-    )
+    for stale_quantile_lookup in [
+        output_dir / "source_quantile_lookup.csv",
+    ]:
+        if stale_quantile_lookup.exists():
+            stale_quantile_lookup.unlink()
 
 
-def _preprocess_output_categorical(
+def _preprocess_target_categorical(
     data: pd.Series,
     classes: list[object],
     flags: list[object],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """One-hot encode categorical output targets and mask flags/missing rows."""
+    """One-hot encode categorical targets and mask flags/missing rows."""
     class_codes = [_normalize_code(value) for value in classes]
     flag_codes = {
         code
@@ -507,7 +436,7 @@ def _preprocess_output_categorical(
     if len(set(class_codes)) != len(class_codes):
         raise ValueError("classes must not contain duplicate values.")
     if set(class_codes) & flag_codes:
-        raise ValueError("classes and flags must not overlap for output preprocessing.")
+        raise ValueError("classes and flags must not overlap for target preprocessing.")
 
     class_to_index = {code: index for index, code in enumerate(class_codes)}
     columns = [str(value) for value in classes]
@@ -529,11 +458,11 @@ def _preprocess_output_categorical(
     )
 
 
-def _preprocess_output_numerical(
+def _preprocess_target_numerical(
     data: pd.Series,
     flags: list[object],
-) -> tuple[pd.Series, pd.Series, dict[str, object], pd.DataFrame]:
-    """Quantile-transform numerical output targets and mask flags/missing rows."""
+) -> tuple[pd.Series, pd.Series, dict[str, object]]:
+    """Keep numerical targets as raw values and mask flags/missing rows."""
     numeric = pd.to_numeric(data, errors="coerce")
     missing_mask = numeric.isna()
 
@@ -545,24 +474,22 @@ def _preprocess_output_numerical(
     flag_mask = numeric.isin(flag_values) if flag_values else pd.Series(False, index=data.index)
     train_mask = ~missing_mask & ~flag_mask
 
-    fit_source = numeric[train_mask]
-    constants, lookup = _fit_quantile_centered_transform(fit_source)
-    target = _apply_quantile_centered_transform(numeric, lookup)
-    target[~train_mask] = 0.0
+    summary = _summarize_raw_values(numeric[train_mask])
+    target = numeric.astype("float32")
+    target.loc[~train_mask] = 0.0
 
     return (
         target,
         train_mask.astype("float32"),
-        constants,
-        lookup,
+        summary,
     )
 
 
-def preprocess_output_dataset(
+def preprocess_target_dataset(
     dataset: pd.DataFrame,
     metadata: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Preprocess output variables and return target and gradient mask arrays."""
+    """Preprocess target variables and return target and gradient mask arrays."""
     required_columns = ["variable_name", "type", "classes", "flags", "bottom", "top"]
     missing_columns = [col for col in required_columns if col not in metadata.columns]
     if missing_columns:
@@ -571,8 +498,7 @@ def preprocess_output_dataset(
     target_parts: list[pd.DataFrame] = []
     mask_parts: list[pd.DataFrame] = []
     column_info: list[dict[str, object]] = []
-    normalization_constants: list[dict[str, object]] = []
-    quantile_lookup_parts: list[pd.DataFrame] = []
+    raw_value_summary: list[dict[str, object]] = []
 
     for row in metadata.itertuples(index=False):
         name = row.variable_name
@@ -582,7 +508,7 @@ def preprocess_output_dataset(
 
         data = dataset[name]
         if variable_type == "categorical":
-            target, mask = _preprocess_output_categorical(
+            target, mask = _preprocess_target_categorical(
                 data,
                 _split_codes(row.classes),
                 _split_codes(row.flags),
@@ -601,7 +527,7 @@ def preprocess_output_dataset(
             target_parts.append(target.add_prefix(f"{name}__"))
             mask_parts.append(mask.add_prefix(f"{name}__"))
         elif variable_type == "numerical":
-            target, mask, constants, lookup = _preprocess_output_numerical(
+            target, mask, summary = _preprocess_target_numerical(
                 data,
                 _split_codes(row.flags),
             )
@@ -614,32 +540,25 @@ def preprocess_output_dataset(
                     "source_variable": name,
                     "source_type": "numerical",
                     "target_type": "continuous",
-                    "meaning": "quantile_centered_value",
+                    "meaning": "raw_value",
                     "mask_rule": "0 when value is flag or missing; bottom/top do not affect mask",
                 }
             )
-            normalization_constants.append(
+            raw_value_summary.append(
                 {
                     "source_variable": name,
                     "column_name": column_name,
-                    "role": "output",
-                    **constants,
+                    "role": "target",
+                    **summary,
                 }
             )
-            if not lookup.empty:
-                lookup = lookup.copy()
-                lookup.insert(0, "source_variable", name)
-                lookup.insert(1, "column_name", column_name)
-                lookup.insert(2, "role", "output")
-                quantile_lookup_parts.append(lookup)
         elif variable_type == "pass":
             continue
 
     if not target_parts:
         empty = pd.DataFrame(index=dataset.index)
         empty.attrs["column_info"] = pd.DataFrame()
-        empty.attrs["normalization_constants"] = pd.DataFrame()
-        empty.attrs["quantile_lookup"] = pd.DataFrame()
+        empty.attrs["raw_value_summary"] = pd.DataFrame()
         return empty, empty.copy()
 
     target = pd.concat(target_parts, axis=1)
@@ -647,53 +566,34 @@ def preprocess_output_dataset(
     for index, info in enumerate(column_info):
         info["column_index"] = index
     target.attrs["column_info"] = pd.DataFrame(column_info)
-    target.attrs["normalization_constants"] = pd.DataFrame(normalization_constants)
-    target.attrs["quantile_lookup"] = (
-        pd.concat(quantile_lookup_parts, ignore_index=True)
-        if quantile_lookup_parts
-        else pd.DataFrame(
-            columns=[
-                "source_variable",
-                "column_name",
-                "role",
-                "source_value",
-                "quantile",
-                "transformed_value",
-            ]
-        )
-    )
+    target.attrs["raw_value_summary"] = pd.DataFrame(raw_value_summary)
     return target, mask
 
 
-def save_preprocessed_output(
-    processed_output: pd.DataFrame,
-    output_mask: pd.DataFrame,
+def save_preprocessed_target(
+    processed_target: pd.DataFrame,
+    target_mask: pd.DataFrame,
     output_dir: str | Path,
 ) -> None:
-    """Save preprocessed output targets, masks, and memo files."""
+    """Save preprocessed targets, masks, and memo files."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    np.save(output_dir / "output_array.npy", processed_output.to_numpy(dtype=np.float32))
-    np.save(output_dir / "output_mask.npy", output_mask.to_numpy(dtype=np.float32))
-    processed_output.attrs.get("column_info", pd.DataFrame()).to_csv(
-        output_dir / "output_columns.csv",
-        index=False,
-        encoding="utf-8-sig",
-        lineterminator="\n",
+    np.save(output_dir / "target_array.npy", processed_target.to_numpy(dtype=np.float32))
+    np.save(output_dir / "target_mask.npy", target_mask.to_numpy(dtype=np.float32))
+    _write_preprocess_csv(
+        processed_target.attrs.get("column_info", pd.DataFrame()),
+        output_dir / "target_columns.csv",
     )
-    processed_output.attrs.get("normalization_constants", pd.DataFrame()).to_csv(
-        output_dir / "output_normalization_constants.csv",
-        index=False,
-        encoding="utf-8-sig",
-        lineterminator="\n",
+    _write_preprocess_csv(
+        processed_target.attrs.get("raw_value_summary", pd.DataFrame()),
+        output_dir / "target_raw_value_summary.csv",
     )
-    processed_output.attrs.get("quantile_lookup", pd.DataFrame()).to_csv(
-        output_dir / "output_quantile_lookup.csv",
-        index=False,
-        encoding="utf-8-sig",
-        lineterminator="\n",
-    )
+    for stale_quantile_lookup in [
+        output_dir / "target_quantile_lookup.csv",
+    ]:
+        if stale_quantile_lookup.exists():
+            stale_quantile_lookup.unlink()
 
 
 def validate_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -864,27 +764,27 @@ def main() -> None:
 
     dataset = load_datasets(dataset_paths, config.get("skip_years_path"))
     metadata = load_metadata(config["metadata_path"])
-    input_metadata = metadata
-    input_variables_path = config.get("input_variables_path")
-    if input_variables_path:
-        input_variables = load_variable_list(input_variables_path)
-        input_metadata = filter_metadata(metadata, input_variables)
+    source_metadata = metadata
+    source_variables_path = config.get("source_variables_path")
+    if source_variables_path:
+        source_variables = load_variable_list(source_variables_path)
+        source_metadata = filter_metadata(metadata, source_variables)
 
-    output_metadata = None
-    output_variables_path = config.get("output_variables_path")
-    if output_variables_path:
-        output_variables = load_variable_list(output_variables_path)
-        output_metadata = filter_metadata(metadata, output_variables)
+    target_metadata = None
+    target_variables_path = config.get("target_variables_path")
+    if target_variables_path:
+        target_variables = load_variable_list(target_variables_path)
+        target_metadata = filter_metadata(metadata, target_variables)
 
     print(f"Loaded dataset shape: {dataset.shape}")
-    print(f"Selected input variables: {len(input_metadata)}")
-    if output_metadata is not None:
-        print(f"Selected output variables: {len(output_metadata)}")
+    print(f"Selected source variables: {len(source_metadata)}")
+    if target_metadata is not None:
+        print(f"Selected target variables: {len(target_metadata)}")
     if args.validate:
-        validation_metadata = input_metadata
-        if output_metadata is not None:
+        validation_metadata = source_metadata
+        if target_metadata is not None:
             validation_metadata = pd.concat(
-                [input_metadata, output_metadata],
+                [source_metadata, target_metadata],
                 ignore_index=True,
             ).drop_duplicates("variable_name")
         reports = validate_dataset(dataset, validation_metadata)
@@ -905,17 +805,17 @@ def main() -> None:
         for report_name, report in reports.items():
             print(f"{report_name}: {report['status'].value_counts().to_dict()}")
 
-    processed_input = preprocess_input_dataset(dataset, input_metadata)
-    save_preprocessed_input(processed_input, "preprocessed")
-    print(f"Preprocessed input shape: {processed_input.shape}")
-    print("Saved preprocessed input artifacts to: preprocessed")
+    processed_source = preprocess_source_dataset(dataset, source_metadata)
+    save_preprocessed_source(processed_source, "preprocessed")
+    print(f"Preprocessed source shape: {processed_source.shape}")
+    print("Saved preprocessed source files to: preprocessed")
 
-    if output_metadata is not None:
-        processed_output, output_mask = preprocess_output_dataset(dataset, output_metadata)
-        save_preprocessed_output(processed_output, output_mask, "preprocessed")
-        print(f"Preprocessed output shape: {processed_output.shape}")
-        print(f"Output mask shape: {output_mask.shape}")
-        print("Saved preprocessed output artifacts to: preprocessed")
+    if target_metadata is not None:
+        processed_target, target_mask = preprocess_target_dataset(dataset, target_metadata)
+        save_preprocessed_target(processed_target, target_mask, "preprocessed")
+        print(f"Preprocessed target shape: {processed_target.shape}")
+        print(f"Target mask shape: {target_mask.shape}")
+        print("Saved preprocessed target files to: preprocessed")
 
 
 if __name__ == "__main__":

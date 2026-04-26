@@ -11,6 +11,7 @@ hn*_all.csv
 preprocessed/*.npy
 preprocessed/*_quantile_lookup.csv
 preprocessed_backup*/
+analysis_outputs/
 
 *.pdf
 metadata_before_split.csv

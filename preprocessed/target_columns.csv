@@ -1,0 +1,81 @@
+﻿column_name,source_variable,source_type,target_type,meaning,mask_rule,column_index
+HE_glu__value,HE_glu,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,0
+HE_HbA1c__value,HE_HbA1c,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,1
+HE_DM_HbA1c__value,HE_DM_HbA1c,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,2
+HE_chol__value,HE_chol,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,3
+HE_HDL_st2__value,HE_HDL_st2,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,4
+HE_TG__value,HE_TG,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,5
+HE_LDL_drct__value,HE_LDL_drct,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,6
+HE_HCHOL__value,HE_HCHOL,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,7
+HE_HTG__value,HE_HTG,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,8
+HE_ast__value,HE_ast,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,9
+HE_alt__value,HE_alt,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,10
+HE_hepaB__0,HE_hepaB,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",11
+HE_hepaB__1,HE_hepaB,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",12
+HE_hepaC__0,HE_hepaC,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",13
+HE_hepaC__1,HE_hepaC,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",14
+HE_HB__value,HE_HB,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,15
+HE_HCT__value,HE_HCT,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,16
+HE_anem__0,HE_anem,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",17
+HE_anem__1,HE_anem,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",18
+HE_BUN__value,HE_BUN,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,19
+HE_crea__value,HE_crea,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,20
+HE_WBC__value,HE_WBC,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,21
+HE_RBC__value,HE_RBC,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,22
+HE_Bplt__value,HE_Bplt,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,23
+HE_MCV__value,HE_MCV,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,24
+HE_MCH__value,HE_MCH,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,25
+HE_MCHC__value,HE_MCHC,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,26
+HE_PTH__value,HE_PTH,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,27
+HE_ALP__value,HE_ALP,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,28
+HE_Uacid__value,HE_Uacid,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,29
+HE_hsCRP__value,HE_hsCRP,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,30
+HE_Ca__value,HE_Ca,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,31
+HE_P__value,HE_P,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,32
+HE_Mg__value,HE_Mg,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,33
+HE_D2__value,HE_D2,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,34
+HE_D3__value,HE_D3,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,35
+HE_D3_3epi__value,HE_D3_3epi,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,36
+HE_Uph__value,HE_Uph,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,37
+HE_Unitr__0,HE_Unitr,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",38
+HE_Unitr__1,HE_Unitr,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",39
+HE_Usg__value,HE_Usg,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,40
+HE_Upro__0,HE_Upro,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",41
+HE_Upro__1,HE_Upro,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",42
+HE_Upro__2,HE_Upro,categorical,one_hot,2,"0 when value is flag, missing, or outside classes",43
+HE_Upro__3,HE_Upro,categorical,one_hot,3,"0 when value is flag, missing, or outside classes",44
+HE_Upro__4,HE_Upro,categorical,one_hot,4,"0 when value is flag, missing, or outside classes",45
+HE_Upro__5,HE_Upro,categorical,one_hot,5,"0 when value is flag, missing, or outside classes",46
+HE_Uglu__0,HE_Uglu,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",47
+HE_Uglu__1,HE_Uglu,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",48
+HE_Uglu__2,HE_Uglu,categorical,one_hot,2,"0 when value is flag, missing, or outside classes",49
+HE_Uglu__3,HE_Uglu,categorical,one_hot,3,"0 when value is flag, missing, or outside classes",50
+HE_Uglu__4,HE_Uglu,categorical,one_hot,4,"0 when value is flag, missing, or outside classes",51
+HE_Uglu__5,HE_Uglu,categorical,one_hot,5,"0 when value is flag, missing, or outside classes",52
+HE_Uket__0,HE_Uket,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",53
+HE_Uket__1,HE_Uket,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",54
+HE_Uket__2,HE_Uket,categorical,one_hot,2,"0 when value is flag, missing, or outside classes",55
+HE_Uket__3,HE_Uket,categorical,one_hot,3,"0 when value is flag, missing, or outside classes",56
+HE_Uket__4,HE_Uket,categorical,one_hot,4,"0 when value is flag, missing, or outside classes",57
+HE_Uket__5,HE_Uket,categorical,one_hot,5,"0 when value is flag, missing, or outside classes",58
+HE_Ubil__0,HE_Ubil,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",59
+HE_Ubil__1,HE_Ubil,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",60
+HE_Ubil__2,HE_Ubil,categorical,one_hot,2,"0 when value is flag, missing, or outside classes",61
+HE_Ubil__3,HE_Ubil,categorical,one_hot,3,"0 when value is flag, missing, or outside classes",62
+HE_Ubil__4,HE_Ubil,categorical,one_hot,4,"0 when value is flag, missing, or outside classes",63
+HE_Ubil__5,HE_Ubil,categorical,one_hot,5,"0 when value is flag, missing, or outside classes",64
+HE_Ubld__0,HE_Ubld,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",65
+HE_Ubld__1,HE_Ubld,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",66
+HE_Ubld__2,HE_Ubld,categorical,one_hot,2,"0 when value is flag, missing, or outside classes",67
+HE_Ubld__3,HE_Ubld,categorical,one_hot,3,"0 when value is flag, missing, or outside classes",68
+HE_Ubld__4,HE_Ubld,categorical,one_hot,4,"0 when value is flag, missing, or outside classes",69
+HE_Ubld__5,HE_Ubld,categorical,one_hot,5,"0 when value is flag, missing, or outside classes",70
+HE_Uro__0,HE_Uro,categorical,one_hot,0,"0 when value is flag, missing, or outside classes",71
+HE_Uro__1,HE_Uro,categorical,one_hot,1,"0 when value is flag, missing, or outside classes",72
+HE_Uro__2,HE_Uro,categorical,one_hot,2,"0 when value is flag, missing, or outside classes",73
+HE_Uro__3,HE_Uro,categorical,one_hot,3,"0 when value is flag, missing, or outside classes",74
+HE_Uro__4,HE_Uro,categorical,one_hot,4,"0 when value is flag, missing, or outside classes",75
+HE_Ucrea__value,HE_Ucrea,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,76
+HE_UNa__value,HE_UNa,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,77
+HE_Ualb__value,HE_Ualb,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,78
+HE_Ukal__value,HE_Ukal,numerical,continuous,raw_value,0 when value is flag or missing; bottom/top do not affect mask,79

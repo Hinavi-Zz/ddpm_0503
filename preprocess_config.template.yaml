@@ -25,5 +25,5 @@ datasets:
     path: dataset/hn24_all.sas7bdat
 metadata_path: metadata.csv
 skip_years_path: skip_years.csv
-input_variables_path: input_variables.txt
-output_variables_path: output_variables.txt
+source_variables_path: source_variables.txt
+target_variables_path: target_variables.txt
