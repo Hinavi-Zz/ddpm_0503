@@ -9,6 +9,8 @@ dataset/
 hn*_all.csv
 
 preprocessed/*.npy
+preprocessed/*_quantile_lookup.csv
+preprocessed_backup*/
 
 *.pdf
 metadata_before_split.csv

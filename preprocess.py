@@ -225,12 +225,90 @@ def _preprocess_input_categorical(data: pd.Series, classes: list[object]) -> pd.
     return pd.DataFrame(encoded, index=data.index, columns=columns)
 
 
+def _fit_quantile_centered_transform(values: pd.Series) -> tuple[dict[str, object], pd.DataFrame]:
+    """Fit an empirical quantile transform with average-rank ties and center at 0."""
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if numeric.empty:
+        return (
+            {
+                "method": "empirical_quantile_centered",
+                "n_values": 0,
+                "n_unique_values": 0,
+                "min_value": np.nan,
+                "max_value": np.nan,
+                "median_value": np.nan,
+                "center_value": 0.0,
+            },
+            pd.DataFrame(columns=["source_value", "quantile", "transformed_value"]),
+        )
+
+    counts = numeric.value_counts(sort=False).sort_index()
+    source_values = counts.index.to_numpy(dtype=float)
+    counts_array = counts.to_numpy(dtype=np.int64)
+    n_values = int(counts_array.sum())
+
+    cumulative_counts = np.cumsum(counts_array)
+    start_ranks = cumulative_counts - counts_array + 1
+    end_ranks = cumulative_counts
+    average_ranks = (start_ranks + end_ranks) / 2
+
+    if n_values == 1:
+        quantiles = np.array([0.5], dtype=np.float64)
+    else:
+        quantiles = (average_ranks - 1) / (n_values - 1)
+
+    transformed_values = quantiles - 0.5
+    lookup = pd.DataFrame(
+        {
+            "source_value": source_values,
+            "quantile": quantiles,
+            "transformed_value": transformed_values,
+        }
+    )
+
+    return (
+        {
+            "method": "empirical_quantile_centered",
+            "n_values": n_values,
+            "n_unique_values": int(len(source_values)),
+            "min_value": float(numeric.min()),
+            "max_value": float(numeric.max()),
+            "median_value": float(numeric.median()),
+            "center_value": 0.0,
+        },
+        lookup,
+    )
+
+
+def _apply_quantile_centered_transform(
+    values: pd.Series,
+    lookup: pd.DataFrame,
+) -> pd.Series:
+    """Apply a fitted centered quantile transform with linear interpolation."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    if lookup.empty:
+        return pd.Series(0.0, index=values.index, dtype="float32")
+
+    source_values = lookup["source_value"].to_numpy(dtype=np.float64)
+    transformed_values = lookup["transformed_value"].to_numpy(dtype=np.float64)
+    numeric_values = numeric.to_numpy(dtype=np.float64)
+    transformed = np.interp(
+        numeric_values,
+        source_values,
+        transformed_values,
+        left=transformed_values[0],
+        right=transformed_values[-1],
+    )
+    transformed[np.isnan(numeric_values)] = 0.0
+    return pd.Series(transformed, index=values.index, dtype="float32")
+
+
 def _preprocess_input_numerical(
     data: pd.Series,
     flags: list[object],
     bottom: object,
     top: object,
-) -> tuple[pd.DataFrame, pd.Series, dict[str, float]]:
+) -> tuple[pd.DataFrame, pd.Series, dict[str, object], pd.DataFrame]:
     """Preprocess 1D input numerical data into indicators and a continuous value."""
     numeric = pd.to_numeric(data, errors="coerce")
     missing_mask = numeric.isna()
@@ -267,27 +345,16 @@ def _preprocess_input_numerical(
     categorical[:, len(flag_values) + 1] = above_top_mask.to_numpy(dtype=np.int8)
     categorical[:, len(flag_values) + 2] = missing_mask.to_numpy(dtype=np.int8)
 
-    mean_source = numeric[~missing_mask & ~flag_mask]
-    mean_value = mean_source.mean()
-    if pd.isna(mean_value):
-        mean_value = 0.0
-
-    std_value = mean_source.std(ddof=0)
-    if pd.isna(std_value) or std_value == 0:
-        std_value = 1.0
-
-    continuous = numeric.copy()
-    continuous[missing_mask | flag_mask] = mean_value
-    continuous = (continuous - mean_value) / std_value
+    fit_source = numeric[~missing_mask & ~flag_mask]
+    constants, lookup = _fit_quantile_centered_transform(fit_source)
+    continuous = _apply_quantile_centered_transform(numeric, lookup)
+    continuous[missing_mask | flag_mask] = 0.0
 
     return (
         pd.DataFrame(categorical, index=data.index, columns=categorical_columns),
         continuous,
-        {
-            "impute_mean": float(mean_value),
-            "normalize_mean": float(mean_value),
-            "normalize_std": float(std_value),
-        },
+        constants,
+        lookup,
     )
 
 
@@ -301,6 +368,7 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
     processed_parts: list[pd.DataFrame] = []
     column_info: list[dict[str, object]] = []
     normalization_constants: list[dict[str, object]] = []
+    quantile_lookup_parts: list[pd.DataFrame] = []
     for row in metadata.itertuples(index=False):
         name = row.variable_name
         variable_type = row.type
@@ -326,7 +394,7 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
             categorical = categorical.add_prefix(f"{name}__")
             processed_parts.append(categorical)
         elif variable_type == "numerical":
-            categorical, continuous, constants = _preprocess_input_numerical(
+            categorical, continuous, constants, lookup = _preprocess_input_numerical(
                 data,
                 _split_codes(row.flags),
                 row.bottom,
@@ -350,16 +418,23 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
                     "source_variable": name,
                     "source_type": "numerical",
                     "feature_type": "continuous",
-                    "meaning": "z_score_normalized_value",
+                    "meaning": "quantile_centered_value",
                 }
             )
             normalization_constants.append(
                 {
                     "source_variable": name,
                     "column_name": f"{name}__value",
+                    "role": "input",
                     **constants,
                 }
             )
+            if not lookup.empty:
+                lookup = lookup.copy()
+                lookup.insert(0, "source_variable", name)
+                lookup.insert(1, "column_name", f"{name}__value")
+                lookup.insert(2, "role", "input")
+                quantile_lookup_parts.append(lookup)
             processed_parts.extend([categorical, continuous])
         elif variable_type == "pass":
             continue
@@ -372,6 +447,20 @@ def preprocess_input_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> p
         info["column_index"] = index
     processed.attrs["column_info"] = pd.DataFrame(column_info)
     processed.attrs["normalization_constants"] = pd.DataFrame(normalization_constants)
+    processed.attrs["quantile_lookup"] = (
+        pd.concat(quantile_lookup_parts, ignore_index=True)
+        if quantile_lookup_parts
+        else pd.DataFrame(
+            columns=[
+                "source_variable",
+                "column_name",
+                "role",
+                "source_value",
+                "quantile",
+                "transformed_value",
+            ]
+        )
+    )
     return processed
 
 
@@ -389,6 +478,12 @@ def save_preprocessed_input(processed_input: pd.DataFrame, output_dir: str | Pat
     )
     processed_input.attrs.get("normalization_constants", pd.DataFrame()).to_csv(
         output_dir / "input_normalization_constants.csv",
+        index=False,
+        encoding="utf-8-sig",
+        lineterminator="\n",
+    )
+    processed_input.attrs.get("quantile_lookup", pd.DataFrame()).to_csv(
+        output_dir / "input_quantile_lookup.csv",
         index=False,
         encoding="utf-8-sig",
         lineterminator="\n",
@@ -437,8 +532,8 @@ def _preprocess_output_categorical(
 def _preprocess_output_numerical(
     data: pd.Series,
     flags: list[object],
-) -> tuple[pd.Series, pd.Series, dict[str, float]]:
-    """Normalize numerical output targets and mask flags/missing rows."""
+) -> tuple[pd.Series, pd.Series, dict[str, object], pd.DataFrame]:
+    """Quantile-transform numerical output targets and mask flags/missing rows."""
     numeric = pd.to_numeric(data, errors="coerce")
     missing_mask = numeric.isna()
 
@@ -450,27 +545,16 @@ def _preprocess_output_numerical(
     flag_mask = numeric.isin(flag_values) if flag_values else pd.Series(False, index=data.index)
     train_mask = ~missing_mask & ~flag_mask
 
-    mean_source = numeric[train_mask]
-    mean_value = mean_source.mean()
-    if pd.isna(mean_value):
-        mean_value = 0.0
-
-    std_value = mean_source.std(ddof=0)
-    if pd.isna(std_value) or std_value == 0:
-        std_value = 1.0
-
-    target = numeric.copy()
-    target[~train_mask] = mean_value
-    target = (target - mean_value) / std_value
+    fit_source = numeric[train_mask]
+    constants, lookup = _fit_quantile_centered_transform(fit_source)
+    target = _apply_quantile_centered_transform(numeric, lookup)
+    target[~train_mask] = 0.0
 
     return (
         target,
         train_mask.astype("float32"),
-        {
-            "impute_mean": float(mean_value),
-            "normalize_mean": float(mean_value),
-            "normalize_std": float(std_value),
-        },
+        constants,
+        lookup,
     )
 
 
@@ -488,6 +572,7 @@ def preprocess_output_dataset(
     mask_parts: list[pd.DataFrame] = []
     column_info: list[dict[str, object]] = []
     normalization_constants: list[dict[str, object]] = []
+    quantile_lookup_parts: list[pd.DataFrame] = []
 
     for row in metadata.itertuples(index=False):
         name = row.variable_name
@@ -516,7 +601,7 @@ def preprocess_output_dataset(
             target_parts.append(target.add_prefix(f"{name}__"))
             mask_parts.append(mask.add_prefix(f"{name}__"))
         elif variable_type == "numerical":
-            target, mask, constants = _preprocess_output_numerical(
+            target, mask, constants, lookup = _preprocess_output_numerical(
                 data,
                 _split_codes(row.flags),
             )
@@ -529,7 +614,7 @@ def preprocess_output_dataset(
                     "source_variable": name,
                     "source_type": "numerical",
                     "target_type": "continuous",
-                    "meaning": "z_score_normalized_value",
+                    "meaning": "quantile_centered_value",
                     "mask_rule": "0 when value is flag or missing; bottom/top do not affect mask",
                 }
             )
@@ -537,9 +622,16 @@ def preprocess_output_dataset(
                 {
                     "source_variable": name,
                     "column_name": column_name,
+                    "role": "output",
                     **constants,
                 }
             )
+            if not lookup.empty:
+                lookup = lookup.copy()
+                lookup.insert(0, "source_variable", name)
+                lookup.insert(1, "column_name", column_name)
+                lookup.insert(2, "role", "output")
+                quantile_lookup_parts.append(lookup)
         elif variable_type == "pass":
             continue
 
@@ -547,6 +639,7 @@ def preprocess_output_dataset(
         empty = pd.DataFrame(index=dataset.index)
         empty.attrs["column_info"] = pd.DataFrame()
         empty.attrs["normalization_constants"] = pd.DataFrame()
+        empty.attrs["quantile_lookup"] = pd.DataFrame()
         return empty, empty.copy()
 
     target = pd.concat(target_parts, axis=1)
@@ -555,6 +648,20 @@ def preprocess_output_dataset(
         info["column_index"] = index
     target.attrs["column_info"] = pd.DataFrame(column_info)
     target.attrs["normalization_constants"] = pd.DataFrame(normalization_constants)
+    target.attrs["quantile_lookup"] = (
+        pd.concat(quantile_lookup_parts, ignore_index=True)
+        if quantile_lookup_parts
+        else pd.DataFrame(
+            columns=[
+                "source_variable",
+                "column_name",
+                "role",
+                "source_value",
+                "quantile",
+                "transformed_value",
+            ]
+        )
+    )
     return target, mask
 
 
@@ -577,6 +684,12 @@ def save_preprocessed_output(
     )
     processed_output.attrs.get("normalization_constants", pd.DataFrame()).to_csv(
         output_dir / "output_normalization_constants.csv",
+        index=False,
+        encoding="utf-8-sig",
+        lineterminator="\n",
+    )
+    processed_output.attrs.get("quantile_lookup", pd.DataFrame()).to_csv(
+        output_dir / "output_quantile_lookup.csv",
         index=False,
         encoding="utf-8-sig",
         lineterminator="\n",
