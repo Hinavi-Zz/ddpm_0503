@@ -1,128 +1,81 @@
-﻿column_name,source_variable,source_type,target_type,meaning,mask_rule,column_index
-HE_glu__flag,HE_glu,numerical,indicator,flag,always 1; flag/value representation matches source,0
-HE_glu__value,HE_glu,numerical,continuous,raw_value,always 1; flag/value representation matches source,1
-HE_HbA1c__flag,HE_HbA1c,numerical,indicator,flag,always 1; flag/value representation matches source,2
-HE_HbA1c__value,HE_HbA1c,numerical,continuous,raw_value,always 1; flag/value representation matches source,3
-HE_DM_HbA1c__flag,HE_DM_HbA1c,numerical,indicator,flag,always 1; flag/value representation matches source,4
-HE_DM_HbA1c__value,HE_DM_HbA1c,numerical,continuous,raw_value,always 1; flag/value representation matches source,5
-HE_chol__flag,HE_chol,numerical,indicator,flag,always 1; flag/value representation matches source,6
-HE_chol__value,HE_chol,numerical,continuous,raw_value,always 1; flag/value representation matches source,7
-HE_HDL_st2__flag,HE_HDL_st2,numerical,indicator,flag,always 1; flag/value representation matches source,8
-HE_HDL_st2__value,HE_HDL_st2,numerical,continuous,raw_value,always 1; flag/value representation matches source,9
-HE_TG__flag,HE_TG,numerical,indicator,flag,always 1; flag/value representation matches source,10
-HE_TG__value,HE_TG,numerical,continuous,raw_value,always 1; flag/value representation matches source,11
-HE_LDL_drct__flag,HE_LDL_drct,numerical,indicator,flag,always 1; flag/value representation matches source,12
-HE_LDL_drct__value,HE_LDL_drct,numerical,continuous,raw_value,always 1; flag/value representation matches source,13
-HE_HCHOL__flag,HE_HCHOL,numerical,indicator,flag,always 1; flag/value representation matches source,14
-HE_HCHOL__value,HE_HCHOL,numerical,continuous,raw_value,always 1; flag/value representation matches source,15
-HE_HTG__flag,HE_HTG,numerical,indicator,flag,always 1; flag/value representation matches source,16
-HE_HTG__value,HE_HTG,numerical,continuous,raw_value,always 1; flag/value representation matches source,17
-HE_ast__flag,HE_ast,numerical,indicator,flag,always 1; flag/value representation matches source,18
-HE_ast__value,HE_ast,numerical,continuous,raw_value,always 1; flag/value representation matches source,19
-HE_alt__flag,HE_alt,numerical,indicator,flag,always 1; flag/value representation matches source,20
-HE_alt__value,HE_alt,numerical,continuous,raw_value,always 1; flag/value representation matches source,21
-HE_hepaB__flag,HE_hepaB,categorical,one_hot,flag,always 1; flag is represented as a target class,22
-HE_hepaB__0,HE_hepaB,categorical,one_hot,0,always 1; flag is represented as a target class,23
-HE_hepaB__1,HE_hepaB,categorical,one_hot,1,always 1; flag is represented as a target class,24
-HE_hepaC__flag,HE_hepaC,categorical,one_hot,flag,always 1; flag is represented as a target class,25
-HE_hepaC__0,HE_hepaC,categorical,one_hot,0,always 1; flag is represented as a target class,26
-HE_hepaC__1,HE_hepaC,categorical,one_hot,1,always 1; flag is represented as a target class,27
-HE_HB__flag,HE_HB,numerical,indicator,flag,always 1; flag/value representation matches source,28
-HE_HB__value,HE_HB,numerical,continuous,raw_value,always 1; flag/value representation matches source,29
-HE_HCT__flag,HE_HCT,numerical,indicator,flag,always 1; flag/value representation matches source,30
-HE_HCT__value,HE_HCT,numerical,continuous,raw_value,always 1; flag/value representation matches source,31
-HE_anem__flag,HE_anem,categorical,one_hot,flag,always 1; flag is represented as a target class,32
-HE_anem__0,HE_anem,categorical,one_hot,0,always 1; flag is represented as a target class,33
-HE_anem__1,HE_anem,categorical,one_hot,1,always 1; flag is represented as a target class,34
-HE_BUN__flag,HE_BUN,numerical,indicator,flag,always 1; flag/value representation matches source,35
-HE_BUN__value,HE_BUN,numerical,continuous,raw_value,always 1; flag/value representation matches source,36
-HE_crea__flag,HE_crea,numerical,indicator,flag,always 1; flag/value representation matches source,37
-HE_crea__value,HE_crea,numerical,continuous,raw_value,always 1; flag/value representation matches source,38
-HE_WBC__flag,HE_WBC,numerical,indicator,flag,always 1; flag/value representation matches source,39
-HE_WBC__value,HE_WBC,numerical,continuous,raw_value,always 1; flag/value representation matches source,40
-HE_RBC__flag,HE_RBC,numerical,indicator,flag,always 1; flag/value representation matches source,41
-HE_RBC__value,HE_RBC,numerical,continuous,raw_value,always 1; flag/value representation matches source,42
-HE_Bplt__flag,HE_Bplt,numerical,indicator,flag,always 1; flag/value representation matches source,43
-HE_Bplt__value,HE_Bplt,numerical,continuous,raw_value,always 1; flag/value representation matches source,44
-HE_MCV__flag,HE_MCV,numerical,indicator,flag,always 1; flag/value representation matches source,45
-HE_MCV__value,HE_MCV,numerical,continuous,raw_value,always 1; flag/value representation matches source,46
-HE_MCH__flag,HE_MCH,numerical,indicator,flag,always 1; flag/value representation matches source,47
-HE_MCH__value,HE_MCH,numerical,continuous,raw_value,always 1; flag/value representation matches source,48
-HE_MCHC__flag,HE_MCHC,numerical,indicator,flag,always 1; flag/value representation matches source,49
-HE_MCHC__value,HE_MCHC,numerical,continuous,raw_value,always 1; flag/value representation matches source,50
-HE_PTH__flag,HE_PTH,numerical,indicator,flag,always 1; flag/value representation matches source,51
-HE_PTH__value,HE_PTH,numerical,continuous,raw_value,always 1; flag/value representation matches source,52
-HE_ALP__flag,HE_ALP,numerical,indicator,flag,always 1; flag/value representation matches source,53
-HE_ALP__value,HE_ALP,numerical,continuous,raw_value,always 1; flag/value representation matches source,54
-HE_Uacid__flag,HE_Uacid,numerical,indicator,flag,always 1; flag/value representation matches source,55
-HE_Uacid__value,HE_Uacid,numerical,continuous,raw_value,always 1; flag/value representation matches source,56
-HE_hsCRP__flag,HE_hsCRP,numerical,indicator,flag,always 1; flag/value representation matches source,57
-HE_hsCRP__value,HE_hsCRP,numerical,continuous,raw_value,always 1; flag/value representation matches source,58
-HE_Ca__flag,HE_Ca,numerical,indicator,flag,always 1; flag/value representation matches source,59
-HE_Ca__value,HE_Ca,numerical,continuous,raw_value,always 1; flag/value representation matches source,60
-HE_P__flag,HE_P,numerical,indicator,flag,always 1; flag/value representation matches source,61
-HE_P__value,HE_P,numerical,continuous,raw_value,always 1; flag/value representation matches source,62
-HE_Mg__flag,HE_Mg,numerical,indicator,flag,always 1; flag/value representation matches source,63
-HE_Mg__value,HE_Mg,numerical,continuous,raw_value,always 1; flag/value representation matches source,64
-HE_D2__flag,HE_D2,numerical,indicator,flag,always 1; flag/value representation matches source,65
-HE_D2__value,HE_D2,numerical,continuous,raw_value,always 1; flag/value representation matches source,66
-HE_D3__flag,HE_D3,numerical,indicator,flag,always 1; flag/value representation matches source,67
-HE_D3__value,HE_D3,numerical,continuous,raw_value,always 1; flag/value representation matches source,68
-HE_D3_3epi__flag,HE_D3_3epi,numerical,indicator,flag,always 1; flag/value representation matches source,69
-HE_D3_3epi__value,HE_D3_3epi,numerical,continuous,raw_value,always 1; flag/value representation matches source,70
-HE_Uph__flag,HE_Uph,numerical,indicator,flag,always 1; flag/value representation matches source,71
-HE_Uph__value,HE_Uph,numerical,continuous,raw_value,always 1; flag/value representation matches source,72
-HE_Unitr__flag,HE_Unitr,categorical,one_hot,flag,always 1; flag is represented as a target class,73
-HE_Unitr__0,HE_Unitr,categorical,one_hot,0,always 1; flag is represented as a target class,74
-HE_Unitr__1,HE_Unitr,categorical,one_hot,1,always 1; flag is represented as a target class,75
-HE_Usg__flag,HE_Usg,numerical,indicator,flag,always 1; flag/value representation matches source,76
-HE_Usg__value,HE_Usg,numerical,continuous,raw_value,always 1; flag/value representation matches source,77
-HE_Upro__flag,HE_Upro,categorical,one_hot,flag,always 1; flag is represented as a target class,78
-HE_Upro__0,HE_Upro,categorical,one_hot,0,always 1; flag is represented as a target class,79
-HE_Upro__1,HE_Upro,categorical,one_hot,1,always 1; flag is represented as a target class,80
-HE_Upro__2,HE_Upro,categorical,one_hot,2,always 1; flag is represented as a target class,81
-HE_Upro__3,HE_Upro,categorical,one_hot,3,always 1; flag is represented as a target class,82
-HE_Upro__4,HE_Upro,categorical,one_hot,4,always 1; flag is represented as a target class,83
-HE_Upro__5,HE_Upro,categorical,one_hot,5,always 1; flag is represented as a target class,84
-HE_Uglu__flag,HE_Uglu,categorical,one_hot,flag,always 1; flag is represented as a target class,85
-HE_Uglu__0,HE_Uglu,categorical,one_hot,0,always 1; flag is represented as a target class,86
-HE_Uglu__1,HE_Uglu,categorical,one_hot,1,always 1; flag is represented as a target class,87
-HE_Uglu__2,HE_Uglu,categorical,one_hot,2,always 1; flag is represented as a target class,88
-HE_Uglu__3,HE_Uglu,categorical,one_hot,3,always 1; flag is represented as a target class,89
-HE_Uglu__4,HE_Uglu,categorical,one_hot,4,always 1; flag is represented as a target class,90
-HE_Uglu__5,HE_Uglu,categorical,one_hot,5,always 1; flag is represented as a target class,91
-HE_Uket__flag,HE_Uket,categorical,one_hot,flag,always 1; flag is represented as a target class,92
-HE_Uket__0,HE_Uket,categorical,one_hot,0,always 1; flag is represented as a target class,93
-HE_Uket__1,HE_Uket,categorical,one_hot,1,always 1; flag is represented as a target class,94
-HE_Uket__2,HE_Uket,categorical,one_hot,2,always 1; flag is represented as a target class,95
-HE_Uket__3,HE_Uket,categorical,one_hot,3,always 1; flag is represented as a target class,96
-HE_Uket__4,HE_Uket,categorical,one_hot,4,always 1; flag is represented as a target class,97
-HE_Uket__5,HE_Uket,categorical,one_hot,5,always 1; flag is represented as a target class,98
-HE_Ubil__flag,HE_Ubil,categorical,one_hot,flag,always 1; flag is represented as a target class,99
-HE_Ubil__0,HE_Ubil,categorical,one_hot,0,always 1; flag is represented as a target class,100
-HE_Ubil__1,HE_Ubil,categorical,one_hot,1,always 1; flag is represented as a target class,101
-HE_Ubil__2,HE_Ubil,categorical,one_hot,2,always 1; flag is represented as a target class,102
-HE_Ubil__3,HE_Ubil,categorical,one_hot,3,always 1; flag is represented as a target class,103
-HE_Ubil__4,HE_Ubil,categorical,one_hot,4,always 1; flag is represented as a target class,104
-HE_Ubil__5,HE_Ubil,categorical,one_hot,5,always 1; flag is represented as a target class,105
-HE_Ubld__flag,HE_Ubld,categorical,one_hot,flag,always 1; flag is represented as a target class,106
-HE_Ubld__0,HE_Ubld,categorical,one_hot,0,always 1; flag is represented as a target class,107
-HE_Ubld__1,HE_Ubld,categorical,one_hot,1,always 1; flag is represented as a target class,108
-HE_Ubld__2,HE_Ubld,categorical,one_hot,2,always 1; flag is represented as a target class,109
-HE_Ubld__3,HE_Ubld,categorical,one_hot,3,always 1; flag is represented as a target class,110
-HE_Ubld__4,HE_Ubld,categorical,one_hot,4,always 1; flag is represented as a target class,111
-HE_Ubld__5,HE_Ubld,categorical,one_hot,5,always 1; flag is represented as a target class,112
-HE_Uro__flag,HE_Uro,categorical,one_hot,flag,always 1; flag is represented as a target class,113
-HE_Uro__0,HE_Uro,categorical,one_hot,0,always 1; flag is represented as a target class,114
-HE_Uro__1,HE_Uro,categorical,one_hot,1,always 1; flag is represented as a target class,115
-HE_Uro__2,HE_Uro,categorical,one_hot,2,always 1; flag is represented as a target class,116
-HE_Uro__3,HE_Uro,categorical,one_hot,3,always 1; flag is represented as a target class,117
-HE_Uro__4,HE_Uro,categorical,one_hot,4,always 1; flag is represented as a target class,118
-HE_Ucrea__flag,HE_Ucrea,numerical,indicator,flag,always 1; flag/value representation matches source,119
-HE_Ucrea__value,HE_Ucrea,numerical,continuous,raw_value,always 1; flag/value representation matches source,120
-HE_UNa__flag,HE_UNa,numerical,indicator,flag,always 1; flag/value representation matches source,121
-HE_UNa__value,HE_UNa,numerical,continuous,raw_value,always 1; flag/value representation matches source,122
-HE_Ualb__flag,HE_Ualb,numerical,indicator,flag,always 1; flag/value representation matches source,123
-HE_Ualb__value,HE_Ualb,numerical,continuous,raw_value,always 1; flag/value representation matches source,124
-HE_Ukal__flag,HE_Ukal,numerical,indicator,flag,always 1; flag/value representation matches source,125
-HE_Ukal__value,HE_Ukal,numerical,continuous,raw_value,always 1; flag/value representation matches source,126
+﻿column_name,source_variable,source_type,target_type,rawdata,default_value,column_index
+HE_glu__value,HE_glu,numerical,continuous,raw_value,0.0,0
+HE_HbA1c__value,HE_HbA1c,numerical,continuous,raw_value,0.0,1
+HE_DM_HbA1c__value,HE_DM_HbA1c,numerical,continuous,raw_value,0.0,2
+HE_chol__value,HE_chol,numerical,continuous,raw_value,0.0,3
+HE_HDL_st2__value,HE_HDL_st2,numerical,continuous,raw_value,0.0,4
+HE_TG__value,HE_TG,numerical,continuous,raw_value,0.0,5
+HE_LDL_drct__value,HE_LDL_drct,numerical,continuous,raw_value,0.0,6
+HE_HCHOL__value,HE_HCHOL,numerical,continuous,raw_value,0.0,7
+HE_HTG__value,HE_HTG,numerical,continuous,raw_value,0.0,8
+HE_ast__value,HE_ast,numerical,continuous,raw_value,0.0,9
+HE_alt__value,HE_alt,numerical,continuous,raw_value,0.0,10
+HE_hepaB__0,HE_hepaB,categorical,one_hot,0,0.0,11
+HE_hepaB__1,HE_hepaB,categorical,one_hot,1,0.0,12
+HE_hepaC__0,HE_hepaC,categorical,one_hot,0,0.0,13
+HE_hepaC__1,HE_hepaC,categorical,one_hot,1,0.0,14
+HE_HB__value,HE_HB,numerical,continuous,raw_value,0.0,15
+HE_HCT__value,HE_HCT,numerical,continuous,raw_value,0.0,16
+HE_anem__0,HE_anem,categorical,one_hot,0,0.0,17
+HE_anem__1,HE_anem,categorical,one_hot,1,0.0,18
+HE_BUN__value,HE_BUN,numerical,continuous,raw_value,0.0,19
+HE_crea__value,HE_crea,numerical,continuous,raw_value,0.0,20
+HE_WBC__value,HE_WBC,numerical,continuous,raw_value,0.0,21
+HE_RBC__value,HE_RBC,numerical,continuous,raw_value,0.0,22
+HE_Bplt__value,HE_Bplt,numerical,continuous,raw_value,0.0,23
+HE_MCV__value,HE_MCV,numerical,continuous,raw_value,0.0,24
+HE_MCH__value,HE_MCH,numerical,continuous,raw_value,0.0,25
+HE_MCHC__value,HE_MCHC,numerical,continuous,raw_value,0.0,26
+HE_PTH__value,HE_PTH,numerical,continuous,raw_value,0.0,27
+HE_ALP__value,HE_ALP,numerical,continuous,raw_value,0.0,28
+HE_Uacid__value,HE_Uacid,numerical,continuous,raw_value,0.0,29
+HE_hsCRP__value,HE_hsCRP,numerical,continuous,raw_value,0.0,30
+HE_Ca__value,HE_Ca,numerical,continuous,raw_value,0.0,31
+HE_P__value,HE_P,numerical,continuous,raw_value,0.0,32
+HE_Mg__value,HE_Mg,numerical,continuous,raw_value,0.0,33
+HE_D2__value,HE_D2,numerical,continuous,raw_value,0.0,34
+HE_D3__value,HE_D3,numerical,continuous,raw_value,0.0,35
+HE_D3_3epi__value,HE_D3_3epi,numerical,continuous,raw_value,0.0,36
+HE_Uph__value,HE_Uph,numerical,continuous,raw_value,0.0,37
+HE_Unitr__0,HE_Unitr,categorical,one_hot,0,0.0,38
+HE_Unitr__1,HE_Unitr,categorical,one_hot,1,0.0,39
+HE_Usg__value,HE_Usg,numerical,continuous,raw_value,0.0,40
+HE_Upro__0,HE_Upro,categorical,one_hot,0,0.0,41
+HE_Upro__1,HE_Upro,categorical,one_hot,1,0.0,42
+HE_Upro__2,HE_Upro,categorical,one_hot,2,0.0,43
+HE_Upro__3,HE_Upro,categorical,one_hot,3,0.0,44
+HE_Upro__4,HE_Upro,categorical,one_hot,4,0.0,45
+HE_Upro__5,HE_Upro,categorical,one_hot,5,0.0,46
+HE_Uglu__0,HE_Uglu,categorical,one_hot,0,0.0,47
+HE_Uglu__1,HE_Uglu,categorical,one_hot,1,0.0,48
+HE_Uglu__2,HE_Uglu,categorical,one_hot,2,0.0,49
+HE_Uglu__3,HE_Uglu,categorical,one_hot,3,0.0,50
+HE_Uglu__4,HE_Uglu,categorical,one_hot,4,0.0,51
+HE_Uglu__5,HE_Uglu,categorical,one_hot,5,0.0,52
+HE_Uket__0,HE_Uket,categorical,one_hot,0,0.0,53
+HE_Uket__1,HE_Uket,categorical,one_hot,1,0.0,54
+HE_Uket__2,HE_Uket,categorical,one_hot,2,0.0,55
+HE_Uket__3,HE_Uket,categorical,one_hot,3,0.0,56
+HE_Uket__4,HE_Uket,categorical,one_hot,4,0.0,57
+HE_Uket__5,HE_Uket,categorical,one_hot,5,0.0,58
+HE_Ubil__0,HE_Ubil,categorical,one_hot,0,0.0,59
+HE_Ubil__1,HE_Ubil,categorical,one_hot,1,0.0,60
+HE_Ubil__2,HE_Ubil,categorical,one_hot,2,0.0,61
+HE_Ubil__3,HE_Ubil,categorical,one_hot,3,0.0,62
+HE_Ubil__4,HE_Ubil,categorical,one_hot,4,0.0,63
+HE_Ubil__5,HE_Ubil,categorical,one_hot,5,0.0,64
+HE_Ubld__0,HE_Ubld,categorical,one_hot,0,0.0,65
+HE_Ubld__1,HE_Ubld,categorical,one_hot,1,0.0,66
+HE_Ubld__2,HE_Ubld,categorical,one_hot,2,0.0,67
+HE_Ubld__3,HE_Ubld,categorical,one_hot,3,0.0,68
+HE_Ubld__4,HE_Ubld,categorical,one_hot,4,0.0,69
+HE_Ubld__5,HE_Ubld,categorical,one_hot,5,0.0,70
+HE_Uro__0,HE_Uro,categorical,one_hot,0,0.0,71
+HE_Uro__1,HE_Uro,categorical,one_hot,1,0.0,72
+HE_Uro__2,HE_Uro,categorical,one_hot,2,0.0,73
+HE_Uro__3,HE_Uro,categorical,one_hot,3,0.0,74
+HE_Uro__4,HE_Uro,categorical,one_hot,4,0.0,75
+HE_Ucrea__value,HE_Ucrea,numerical,continuous,raw_value,0.0,76
+HE_UNa__value,HE_UNa,numerical,continuous,raw_value,0.0,77
+HE_Ualb__value,HE_Ualb,numerical,continuous,raw_value,0.0,78
+HE_Ukal__value,HE_Ukal,numerical,continuous,raw_value,0.0,79

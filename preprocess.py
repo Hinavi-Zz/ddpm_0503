@@ -102,6 +102,19 @@ def filter_metadata(metadata: pd.DataFrame, variables: list[str]) -> pd.DataFram
     if "variable_name" not in metadata.columns:
         raise ValueError("Metadata is missing column: variable_name")
 
+    selected_variables = set(variables)
+    metadata_variables = set(metadata["variable_name"])
+    duplicates = sorted(
+        set(metadata.loc[metadata["variable_name"].duplicated(), "variable_name"])
+        & selected_variables
+    )
+    if duplicates:
+        raise ValueError(f"Metadata contains duplicate selected variables: {duplicates}")
+
+    missing = [variable for variable in variables if variable not in metadata_variables]
+    if missing:
+        raise ValueError(f"Metadata is missing selected variables: {missing}")
+
     variable_index = {variable: index for index, variable in enumerate(variables)}
     filtered = metadata[metadata["variable_name"].isin(variable_index)].copy()
     filtered["_variable_order"] = filtered["variable_name"].map(variable_index)
@@ -201,12 +214,12 @@ def _normalize_code(value: object) -> tuple[str, str] | None:
     return ("num", _format_decimal(parsed))
 
 
-def _preprocess_categorical_with_flag(
+def _preprocess_categorical_value_and_mask(
     data: pd.Series,
     classes: list[object],
     flags: list[object],
-) -> pd.DataFrame:
-    """One-hot encode categorical data with a single leading flag/missing column."""
+) -> tuple[pd.DataFrame, pd.Series]:
+    """One-hot encode categorical data and return a variable-level valid mask."""
     class_codes = [_normalize_code(value) for value in classes]
     flag_codes = {
         code
@@ -221,166 +234,177 @@ def _preprocess_categorical_with_flag(
         raise ValueError("classes and flags must not overlap for categorical preprocessing.")
 
     class_to_index = {code: index for index, code in enumerate(class_codes)}
-    columns = ["flag"] + [str(value) for value in classes]
+    columns = [str(value) for value in classes]
     normalized = data.map(_normalize_code)
     class_indices = normalized.map(class_to_index)
-    flag_mask = normalized.isna() | normalized.isin(flag_codes) | class_indices.isna()
+    missing_or_flag_mask = normalized.isna() | normalized.isin(flag_codes)
+    invalid_class_mask = ~missing_or_flag_mask & class_indices.isna()
+    masked = missing_or_flag_mask | invalid_class_mask
 
-    encoded = np.zeros((len(data), len(classes) + 1), dtype=np.int8)
-    encoded[np.flatnonzero(flag_mask.to_numpy())] = np.array(
-        [1] + [0] * len(classes),
-        dtype=np.int8,
-    )
-    valid_mask = ~flag_mask
+    encoded = np.zeros((len(data), len(classes)), dtype=np.int8)
+    valid_mask = ~masked
     valid_positions = np.flatnonzero(valid_mask.to_numpy())
-    encoded[valid_positions, class_indices[valid_mask].astype(int).to_numpy() + 1] = 1
-
-    return pd.DataFrame(encoded, index=data.index, columns=columns)
-
-
-def _summarize_raw_values(values: pd.Series) -> dict[str, object]:
-    """Return summary metadata for raw continuous values."""
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    if numeric.empty:
-        return {
-            "method": "raw_value",
-            "n_values": 0,
-            "n_unique_values": 0,
-            "min_value": np.nan,
-            "max_value": np.nan,
-            "median_value": np.nan,
-            "placeholder_value": 0.0,
-        }
-
-    return {
-        "method": "raw_value",
-        "n_values": int(numeric.shape[0]),
-        "n_unique_values": int(numeric.nunique(dropna=True)),
-        "min_value": float(numeric.min()),
-        "max_value": float(numeric.max()),
-        "median_value": float(numeric.median()),
-        "placeholder_value": 0.0,
-    }
-
-
-def _preprocess_source_numerical(
-    data: pd.Series,
-    flags: list[object],
-) -> tuple[pd.DataFrame, pd.Series, dict[str, object]]:
-    """Preprocess 1D source numerical data into a flag indicator and continuous value."""
-    numeric = pd.to_numeric(data, errors="coerce")
-    missing_mask = numeric.isna()
-
-    flag_values = [
-        float(parsed)
-        for flag in flags
-        if (parsed := _to_decimal(flag)) is not None
-    ]
-    flag_mask = numeric.isin(flag_values) if flag_values else pd.Series(False, index=data.index)
-    flag_or_missing_mask = missing_mask | flag_mask
-
-    categorical = pd.DataFrame(
-        {"flag": flag_or_missing_mask.to_numpy(dtype=np.int8)},
-        index=data.index,
-    )
-
-    valid_continuous_mask = ~flag_or_missing_mask
-    summary = _summarize_raw_values(numeric[valid_continuous_mask])
-    continuous = numeric.astype("float32")
-    continuous.loc[~valid_continuous_mask] = 0.0
+    encoded[valid_positions, class_indices[valid_mask].astype(int).to_numpy()] = 1
 
     return (
-        categorical,
-        continuous,
-        summary,
+        pd.DataFrame(encoded, index=data.index, columns=columns),
+        valid_mask.astype(np.int8),
     )
 
 
-def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFrame:
-    """Preprocess source variables described in metadata."""
+def _preprocess_numerical_value_and_mask(
+    data: pd.Series,
+    flags: list[object],
+) -> tuple[pd.Series, pd.Series]:
+    """Preprocess numerical data into one continuous value and a valid mask."""
+    numeric = pd.to_numeric(data, errors="coerce")
+    normalized = data.map(_normalize_code)
+    missing_mask = normalized.isna()
+
+    flag_codes = {
+        code
+        for flag in flags
+        if (code := _normalize_code(flag)) is not None
+    }
+    flag_mask = normalized.isin(flag_codes) if flag_codes else pd.Series(False, index=data.index)
+    nonnumeric_mask = numeric.isna() & ~missing_mask & ~flag_mask
+    masked = missing_mask | flag_mask | nonnumeric_mask
+
+    valid_mask = ~masked
+    continuous = numeric.astype("float32")
+    continuous.loc[~valid_mask] = 0.0
+
+    return (
+        continuous,
+        valid_mask.astype(np.int8),
+    )
+
+
+def _make_missing_series(index: pd.Index) -> pd.Series:
+    return pd.Series(pd.NA, index=index, dtype="object")
+
+
+def _empty_preprocessed(index: pd.Index) -> pd.DataFrame:
+    empty = pd.DataFrame(index=index)
+    empty.attrs["column_info"] = pd.DataFrame()
+    empty.attrs["mask_info"] = pd.DataFrame()
+    return empty
+
+
+def _make_value_mask_frame(values: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
+    mask_values = np.repeat(
+        mask.to_numpy(dtype=np.int8)[:, None],
+        values.shape[1],
+        axis=1,
+    )
+    return pd.DataFrame(
+        mask_values,
+        index=values.index,
+        columns=[f"{column}__mask" for column in values.columns],
+    )
+
+
+def _value_type_column(role: str) -> str:
+    if role == "source":
+        return "feature_type"
+    if role == "target":
+        return "target_type"
+    raise ValueError(f"Unsupported role: {role}")
+
+
+def preprocess_dataset(
+    dataset: pd.DataFrame,
+    metadata: pd.DataFrame,
+    role: str,
+) -> pd.DataFrame:
+    """Preprocess selected variables into value columns plus value-shaped masks."""
+    value_type_column = _value_type_column(role)
     required_columns = ["variable_name", "type", "classes", "flags", "bottom", "top"]
     missing_columns = [col for col in required_columns if col not in metadata.columns]
     if missing_columns:
         raise ValueError(f"Metadata is missing columns: {missing_columns}")
 
-    processed_parts: list[pd.DataFrame] = []
+    value_parts: list[pd.DataFrame] = []
+    mask_parts: list[pd.DataFrame] = []
     column_info: list[dict[str, object]] = []
-    raw_value_summary: list[dict[str, object]] = []
+    mask_info: list[dict[str, object]] = []
     for row in metadata.itertuples(index=False):
         name = row.variable_name
         variable_type = row.type
-        if name not in dataset.columns:
+        if variable_type == "pass":
             continue
 
-        data = dataset[name]
+        data = dataset[name] if name in dataset.columns else _make_missing_series(dataset.index)
         if variable_type == "categorical":
-            categorical = _preprocess_categorical_with_flag(
+            values, mask = _preprocess_categorical_value_and_mask(
                 data,
                 _split_codes(row.classes),
                 _split_codes(row.flags),
             )
-            for column in categorical.columns:
+            values = values.add_prefix(f"{name}__")
+            for column in values.columns:
+                rawdata = column.removeprefix(f"{name}__")
                 column_info.append(
                     {
-                        "column_name": f"{name}__{column}",
+                        "column_name": column,
                         "source_variable": name,
                         "source_type": "categorical",
-                        "feature_type": "one_hot",
-                        "meaning": column,
-                        "mask_rule": "flag is 1 when value is metadata flag, missing, or outside classes",
+                        value_type_column: "one_hot",
+                        "rawdata": rawdata,
+                        "default_value": 0.0,
                     }
                 )
-            categorical = categorical.add_prefix(f"{name}__")
-            processed_parts.append(categorical)
+            value_parts.append(values)
         elif variable_type == "numerical":
-            categorical, continuous, summary = _preprocess_source_numerical(
+            continuous, mask = _preprocess_numerical_value_and_mask(
                 data,
                 _split_codes(row.flags),
             )
-            for column in categorical.columns:
-                column_info.append(
-                    {
-                        "column_name": f"{name}__{column}",
-                        "source_variable": name,
-                        "source_type": "numerical",
-                        "feature_type": "indicator",
-                        "meaning": column,
-                        "mask_rule": "1 when value is metadata flag or missing",
-                    }
-                )
-            categorical = categorical.add_prefix(f"{name}__")
-            continuous = continuous.rename(f"{name}__value").to_frame()
+            values = continuous.rename(f"{name}__value").to_frame()
+            value_column = f"{name}__value"
             column_info.append(
                 {
-                    "column_name": f"{name}__value",
+                    "column_name": value_column,
                     "source_variable": name,
                     "source_type": "numerical",
-                    "feature_type": "continuous",
-                    "meaning": "raw_value",
-                    "mask_rule": "value is 0 when flag is 1",
+                    value_type_column: "continuous",
+                    "rawdata": "raw_value",
+                    "default_value": 0.0,
                 }
             )
-            raw_value_summary.append(
+            value_parts.append(values)
+        else:
+            raise ValueError(f"Unsupported metadata type for {name}: {variable_type}")
+
+        value_mask = _make_value_mask_frame(values, mask)
+        mask_parts.append(value_mask)
+        for mask_column in value_mask.columns:
+            mask_info.append(
                 {
+                    "column_name": mask_column,
                     "source_variable": name,
-                    "column_name": f"{name}__value",
-                    "role": "source",
-                    **summary,
+                    "valid_rate": float(mask.mean()) if len(mask) else np.nan,
                 }
             )
-            processed_parts.extend([categorical, continuous])
-        elif variable_type == "pass":
-            continue
 
-    if not processed_parts:
-        return pd.DataFrame(index=dataset.index)
+    if not value_parts:
+        return _empty_preprocessed(dataset.index)
 
-    processed = pd.concat(processed_parts, axis=1)
+    processed = pd.concat(value_parts, axis=1)
+    mask = pd.concat(mask_parts, axis=1)
     for index, info in enumerate(column_info):
         info["column_index"] = index
+    for index, info in enumerate(mask_info):
+        info["column_index"] = index
     processed.attrs["column_info"] = pd.DataFrame(column_info)
-    processed.attrs["raw_value_summary"] = pd.DataFrame(raw_value_summary)
+    processed.attrs["mask"] = mask
+    processed.attrs["mask_info"] = pd.DataFrame(mask_info)
     return processed
+
+
+def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFrame:
+    """Preprocess source variables into value columns plus value-shaped masks."""
+    return preprocess_dataset(dataset, metadata, "source")
 
 
 def _write_preprocess_csv(data: pd.DataFrame, path: Path) -> None:
@@ -393,161 +417,68 @@ def _write_preprocess_csv(data: pd.DataFrame, path: Path) -> None:
 
 
 def save_preprocessed_source(processed_source: pd.DataFrame, output_dir: str | Path) -> None:
-    """Save preprocessed source array and memo files."""
+    """Save preprocessed source value/mask arrays and memo files."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    source_mask = processed_source.attrs.get(
+        "mask",
+        pd.DataFrame(index=processed_source.index),
+    )
 
     np.save(output_dir / "source_array.npy", processed_source.to_numpy(dtype=np.float32))
+    np.save(output_dir / "source_mask.npy", source_mask.to_numpy(dtype=np.float32))
     _write_preprocess_csv(
         processed_source.attrs.get("column_info", pd.DataFrame()),
         output_dir / "source_columns.csv",
     )
     _write_preprocess_csv(
-        processed_source.attrs.get("raw_value_summary", pd.DataFrame()),
-        output_dir / "source_raw_value_summary.csv",
+        processed_source.attrs.get("mask_info", pd.DataFrame()),
+        output_dir / "source_mask_columns.csv",
     )
-    for stale_quantile_lookup in [
+    for stale_file in [
         output_dir / "source_quantile_lookup.csv",
+        output_dir / "source_raw_value_summary.csv",
     ]:
-        if stale_quantile_lookup.exists():
-            stale_quantile_lookup.unlink()
-
-
-def _preprocess_target_categorical(
-    data: pd.Series,
-    classes: list[object],
-    flags: list[object],
-) -> pd.DataFrame:
-    """One-hot encode categorical targets with the same representation as source."""
-    return _preprocess_categorical_with_flag(data, classes, flags).astype("float32")
-
-
-def _preprocess_target_numerical(
-    data: pd.Series,
-    flags: list[object],
-) -> tuple[pd.DataFrame, dict[str, object]]:
-    """Keep numerical targets with the same flag/value representation as source."""
-    flag, value, summary = _preprocess_source_numerical(data, flags)
-    target = pd.DataFrame(
-        {
-            "flag": flag["flag"].to_numpy(dtype=np.float32),
-            "value": value.to_numpy(dtype=np.float32),
-        },
-        index=data.index,
-    )
-
-    return (
-        target,
-        summary,
-    )
+        if stale_file.exists():
+            stale_file.unlink()
 
 
 def preprocess_target_dataset(
     dataset: pd.DataFrame,
     metadata: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Preprocess target variables."""
-    required_columns = ["variable_name", "type", "classes", "flags", "bottom", "top"]
-    missing_columns = [col for col in required_columns if col not in metadata.columns]
-    if missing_columns:
-        raise ValueError(f"Metadata is missing columns: {missing_columns}")
-
-    target_parts: list[pd.DataFrame] = []
-    column_info: list[dict[str, object]] = []
-    raw_value_summary: list[dict[str, object]] = []
-
-    for row in metadata.itertuples(index=False):
-        name = row.variable_name
-        variable_type = row.type
-        if name not in dataset.columns:
-            continue
-
-        data = dataset[name]
-        if variable_type == "categorical":
-            target = _preprocess_target_categorical(
-                data,
-                _split_codes(row.classes),
-                _split_codes(row.flags),
-            )
-            for column in target.columns:
-                column_info.append(
-                    {
-                        "column_name": f"{name}__{column}",
-                        "source_variable": name,
-                        "source_type": "categorical",
-                        "target_type": "one_hot",
-                        "meaning": column,
-                        "mask_rule": "always 1; flag is represented as a target class",
-                    }
-                )
-            target_parts.append(target.add_prefix(f"{name}__"))
-        elif variable_type == "numerical":
-            target, summary = _preprocess_target_numerical(
-                data,
-                _split_codes(row.flags),
-            )
-            target_parts.append(target.add_prefix(f"{name}__"))
-            for column in target.columns:
-                column_info.append(
-                    {
-                        "column_name": f"{name}__{column}",
-                        "source_variable": name,
-                        "source_type": "numerical",
-                        "target_type": "indicator" if column == "flag" else "continuous",
-                        "meaning": column if column == "flag" else "raw_value",
-                        "mask_rule": "always 1; flag/value representation matches source",
-                    }
-                )
-            raw_value_summary.append(
-                {
-                    "source_variable": name,
-                    "column_name": f"{name}__value",
-                    "role": "target",
-                    **summary,
-                }
-            )
-        elif variable_type == "pass":
-            continue
-
-    if not target_parts:
-        empty = pd.DataFrame(index=dataset.index)
-        empty.attrs["column_info"] = pd.DataFrame()
-        empty.attrs["raw_value_summary"] = pd.DataFrame()
-        return empty
-
-    target = pd.concat(target_parts, axis=1)
-    for index, info in enumerate(column_info):
-        info["column_index"] = index
-    target.attrs["column_info"] = pd.DataFrame(column_info)
-    target.attrs["raw_value_summary"] = pd.DataFrame(raw_value_summary)
-    return target
+    """Preprocess target variables into value columns plus value-shaped masks."""
+    return preprocess_dataset(dataset, metadata, "target")
 
 
 def save_preprocessed_target(
     processed_target: pd.DataFrame,
     output_dir: str | Path,
 ) -> None:
-    """Save preprocessed targets and memo files."""
+    """Save preprocessed target value/mask arrays and memo files."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    target_mask = processed_target.attrs.get(
+        "mask",
+        pd.DataFrame(index=processed_target.index),
+    )
 
     np.save(output_dir / "target_array.npy", processed_target.to_numpy(dtype=np.float32))
+    np.save(output_dir / "target_mask.npy", target_mask.to_numpy(dtype=np.float32))
     _write_preprocess_csv(
         processed_target.attrs.get("column_info", pd.DataFrame()),
         output_dir / "target_columns.csv",
     )
     _write_preprocess_csv(
-        processed_target.attrs.get("raw_value_summary", pd.DataFrame()),
-        output_dir / "target_raw_value_summary.csv",
+        processed_target.attrs.get("mask_info", pd.DataFrame()),
+        output_dir / "target_mask_columns.csv",
     )
-    for stale_quantile_lookup in [
+    for stale_file in [
         output_dir / "target_quantile_lookup.csv",
+        output_dir / "target_raw_value_summary.csv",
     ]:
-        if stale_quantile_lookup.exists():
-            stale_quantile_lookup.unlink()
-    stale_target_mask = output_dir / "target_mask.npy"
-    if stale_target_mask.exists():
-        stale_target_mask.unlink()
+        if stale_file.exists():
+            stale_file.unlink()
 
 
 def validate_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> dict[str, pd.DataFrame]:
