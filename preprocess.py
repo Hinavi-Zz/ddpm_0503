@@ -1,11 +1,36 @@
 from pathlib import Path
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import argparse
+import json
 import re
 import warnings
 
 import numpy as np
 import pandas as pd
+
+
+CAT_MISSING_VALUE = -1
+DEFAULT_SPLIT_RATIOS = (0.9, 0.09, 0.01)
+DEFAULT_SPLIT_SEED = 42
+SPLIT_NAMES = ("train", "val", "test")
+
+
+@dataclass(frozen=True)
+class PreprocessedTable:
+    num: np.ndarray
+    num_mask: np.ndarray
+    cat: np.ndarray
+    cat_mask: np.ndarray
+    num_features: list[str]
+    cat_features: list[str]
+    cat_cardinalities: list[int]
+
+
+@dataclass(frozen=True)
+class NumericNormalization:
+    means: np.ndarray
+    stds: np.ndarray
 
 
 def load_sas7bdat(path: str | Path) -> pd.DataFrame:
@@ -218,8 +243,8 @@ def _preprocess_categorical_value_and_mask(
     data: pd.Series,
     classes: list[object],
     flags: list[object],
-) -> tuple[pd.DataFrame, pd.Series]:
-    """One-hot encode categorical data and return a variable-level valid mask."""
+) -> tuple[pd.Series, pd.Series]:
+    """Encode categorical data as class indices and return a valid mask."""
     class_codes = [_normalize_code(value) for value in classes]
     flag_codes = {
         code
@@ -234,21 +259,19 @@ def _preprocess_categorical_value_and_mask(
         raise ValueError("classes and flags must not overlap for categorical preprocessing.")
 
     class_to_index = {code: index for index, code in enumerate(class_codes)}
-    columns = [str(value) for value in classes]
     normalized = data.map(_normalize_code)
     class_indices = normalized.map(class_to_index)
     missing_or_flag_mask = normalized.isna() | normalized.isin(flag_codes)
     invalid_class_mask = ~missing_or_flag_mask & class_indices.isna()
     masked = missing_or_flag_mask | invalid_class_mask
 
-    encoded = np.zeros((len(data), len(classes)), dtype=np.int8)
     valid_mask = ~masked
-    valid_positions = np.flatnonzero(valid_mask.to_numpy())
-    encoded[valid_positions, class_indices[valid_mask].astype(int).to_numpy()] = 1
+    encoded = class_indices.fillna(CAT_MISSING_VALUE).astype(np.int64)
+    encoded.loc[masked] = CAT_MISSING_VALUE
 
     return (
-        pd.DataFrame(encoded, index=data.index, columns=columns),
-        valid_mask.astype(np.int8),
+        encoded,
+        valid_mask.astype(np.int64),
     )
 
 
@@ -276,7 +299,7 @@ def _preprocess_numerical_value_and_mask(
 
     return (
         continuous,
-        valid_mask.astype(np.int8),
+        valid_mask.astype(np.int64),
     )
 
 
@@ -284,201 +307,275 @@ def _make_missing_series(index: pd.Index) -> pd.Series:
     return pd.Series(pd.NA, index=index, dtype="object")
 
 
-def _empty_preprocessed(index: pd.Index) -> pd.DataFrame:
-    empty = pd.DataFrame(index=index)
-    empty.attrs["column_info"] = pd.DataFrame()
-    empty.attrs["mask_info"] = pd.DataFrame()
-    return empty
+def _stack_columns(columns: list[np.ndarray], n_rows: int, dtype: np.dtype) -> np.ndarray:
+    if not columns:
+        return np.empty((n_rows, 0), dtype=dtype)
 
-
-def _make_value_mask_frame(values: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-    mask_values = np.repeat(
-        mask.to_numpy(dtype=np.int8)[:, None],
-        values.shape[1],
-        axis=1,
-    )
-    return pd.DataFrame(
-        mask_values,
-        index=values.index,
-        columns=[f"{column}__mask" for column in values.columns],
-    )
-
-
-def _value_type_column(role: str) -> str:
-    if role == "source":
-        return "feature_type"
-    if role == "target":
-        return "target_type"
-    raise ValueError(f"Unsupported role: {role}")
+    return np.column_stack(columns).astype(dtype, copy=False)
 
 
 def preprocess_dataset(
     dataset: pd.DataFrame,
     metadata: pd.DataFrame,
-    role: str,
-) -> pd.DataFrame:
-    """Preprocess selected variables into value columns plus value-shaped masks."""
-    value_type_column = _value_type_column(role)
+    role: str = "dataset",
+) -> PreprocessedTable:
+    """Preprocess selected variables into separate numerical and categorical arrays."""
     required_columns = ["variable_name", "type", "classes", "flags", "bottom", "top"]
     missing_columns = [col for col in required_columns if col not in metadata.columns]
     if missing_columns:
         raise ValueError(f"Metadata is missing columns: {missing_columns}")
 
-    value_parts: list[pd.DataFrame] = []
-    mask_parts: list[pd.DataFrame] = []
-    column_info: list[dict[str, object]] = []
-    mask_info: list[dict[str, object]] = []
+    n_rows = len(dataset.index)
+    num_values: list[np.ndarray] = []
+    num_masks: list[np.ndarray] = []
+    cat_values: list[np.ndarray] = []
+    cat_masks: list[np.ndarray] = []
+    num_features: list[str] = []
+    cat_features: list[str] = []
+    cat_cardinalities: list[int] = []
+
     for row in metadata.itertuples(index=False):
-        name = row.variable_name
-        variable_type = row.type
+        name = str(row.variable_name)
+        variable_type = str(row.type)
         if variable_type == "pass":
             continue
 
         data = dataset[name] if name in dataset.columns else _make_missing_series(dataset.index)
         if variable_type == "categorical":
-            values, mask = _preprocess_categorical_value_and_mask(
+            classes = _split_codes(row.classes)
+            if not classes:
+                raise ValueError(f"Categorical variable has no classes: {role}.{name}")
+
+            encoded, mask = _preprocess_categorical_value_and_mask(
                 data,
-                _split_codes(row.classes),
+                classes,
                 _split_codes(row.flags),
             )
-            values = values.add_prefix(f"{name}__")
-            for column in values.columns:
-                rawdata = column.removeprefix(f"{name}__")
-                column_info.append(
-                    {
-                        "column_name": column,
-                        "source_variable": name,
-                        "source_type": "categorical",
-                        value_type_column: "one_hot",
-                        "rawdata": rawdata,
-                        "default_value": 0.0,
-                    }
-                )
-            value_parts.append(values)
+            cat_values.append(encoded.to_numpy(dtype=np.int64))
+            cat_masks.append(mask.to_numpy(dtype=np.int64))
+            cat_features.append(name)
+            cat_cardinalities.append(len(classes))
         elif variable_type == "numerical":
             continuous, mask = _preprocess_numerical_value_and_mask(
                 data,
                 _split_codes(row.flags),
             )
-            values = continuous.rename(f"{name}__value").to_frame()
-            value_column = f"{name}__value"
-            column_info.append(
-                {
-                    "column_name": value_column,
-                    "source_variable": name,
-                    "source_type": "numerical",
-                    value_type_column: "continuous",
-                    "rawdata": "raw_value",
-                    "default_value": 0.0,
-                }
-            )
-            value_parts.append(values)
+            num_values.append(continuous.to_numpy(dtype=np.float32))
+            num_masks.append(mask.to_numpy(dtype=np.int64))
+            num_features.append(name)
         else:
-            raise ValueError(f"Unsupported metadata type for {name}: {variable_type}")
+            raise ValueError(f"Unsupported metadata type for {role}.{name}: {variable_type}")
 
-        value_mask = _make_value_mask_frame(values, mask)
-        mask_parts.append(value_mask)
-        for mask_column in value_mask.columns:
-            mask_info.append(
-                {
-                    "column_name": mask_column,
-                    "source_variable": name,
-                    "valid_rate": float(mask.mean()) if len(mask) else np.nan,
-                }
-            )
-
-    if not value_parts:
-        return _empty_preprocessed(dataset.index)
-
-    processed = pd.concat(value_parts, axis=1)
-    mask = pd.concat(mask_parts, axis=1)
-    for index, info in enumerate(column_info):
-        info["column_index"] = index
-    for index, info in enumerate(mask_info):
-        info["column_index"] = index
-    processed.attrs["column_info"] = pd.DataFrame(column_info)
-    processed.attrs["mask"] = mask
-    processed.attrs["mask_info"] = pd.DataFrame(mask_info)
-    return processed
+    return PreprocessedTable(
+        num=_stack_columns(num_values, n_rows, np.dtype("float32")),
+        num_mask=_stack_columns(num_masks, n_rows, np.dtype("int64")),
+        cat=_stack_columns(cat_values, n_rows, np.dtype("int64")),
+        cat_mask=_stack_columns(cat_masks, n_rows, np.dtype("int64")),
+        num_features=num_features,
+        cat_features=cat_features,
+        cat_cardinalities=cat_cardinalities,
+    )
 
 
-def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFrame:
-    """Preprocess source variables into value columns plus value-shaped masks."""
+def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> PreprocessedTable:
+    """Preprocess source variables into numerical/categorical arrays and masks."""
     return preprocess_dataset(dataset, metadata, "source")
 
 
-def _write_preprocess_csv(data: pd.DataFrame, path: Path) -> None:
-    data.to_csv(
-        path,
-        index=False,
-        encoding="utf-8-sig",
-        lineterminator="\n",
-    )
-
-
-def save_preprocessed_source(processed_source: pd.DataFrame, output_dir: str | Path) -> None:
-    """Save preprocessed source value/mask arrays and memo files."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    source_mask = processed_source.attrs.get(
-        "mask",
-        pd.DataFrame(index=processed_source.index),
-    )
-
-    np.save(output_dir / "source_array.npy", processed_source.to_numpy(dtype=np.float32))
-    np.save(output_dir / "source_mask.npy", source_mask.to_numpy(dtype=np.float32))
-    _write_preprocess_csv(
-        processed_source.attrs.get("column_info", pd.DataFrame()),
-        output_dir / "source_columns.csv",
-    )
-    _write_preprocess_csv(
-        processed_source.attrs.get("mask_info", pd.DataFrame()),
-        output_dir / "source_mask_columns.csv",
-    )
-    for stale_file in [
-        output_dir / "source_quantile_lookup.csv",
-        output_dir / "source_raw_value_summary.csv",
-    ]:
-        if stale_file.exists():
-            stale_file.unlink()
-
-
-def preprocess_target_dataset(
-    dataset: pd.DataFrame,
-    metadata: pd.DataFrame,
-) -> pd.DataFrame:
-    """Preprocess target variables into value columns plus value-shaped masks."""
+def preprocess_target_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> PreprocessedTable:
+    """Preprocess target variables into numerical/categorical arrays and masks."""
     return preprocess_dataset(dataset, metadata, "target")
 
 
-def save_preprocessed_target(
-    processed_target: pd.DataFrame,
-    output_dir: str | Path,
+def make_split_indices(
+    n_rows: int,
+    ratios: tuple[float, float, float] = DEFAULT_SPLIT_RATIOS,
+    seed: int = DEFAULT_SPLIT_SEED,
+) -> dict[str, np.ndarray]:
+    """Shuffle row indices and split them into train/val/test."""
+    if n_rows < 0:
+        raise ValueError("n_rows must not be negative.")
+    if len(ratios) != 3:
+        raise ValueError("ratios must contain train, val, and test ratios.")
+    if not np.isclose(sum(ratios), 1.0):
+        raise ValueError(f"Split ratios must sum to 1.0: {ratios}")
+
+    rng = np.random.default_rng(seed)
+    shuffled = rng.permutation(n_rows)
+    train_size = int(n_rows * ratios[0])
+    val_size = int(n_rows * ratios[1])
+    test_size = n_rows - train_size - val_size
+
+    return {
+        "train": shuffled[:train_size],
+        "val": shuffled[train_size : train_size + val_size],
+        "test": shuffled[train_size + val_size : train_size + val_size + test_size],
+    }
+
+
+def fit_num_normalization(
+    num: np.ndarray,
+    num_mask: np.ndarray,
+    train_indices: np.ndarray,
+) -> NumericNormalization:
+    """Fit z-score constants from train valid values only."""
+    n_features = num.shape[1]
+    means = np.zeros(n_features, dtype=np.float64)
+    stds = np.ones(n_features, dtype=np.float64)
+    if n_features == 0 or len(train_indices) == 0:
+        return NumericNormalization(means=means, stds=stds)
+
+    train_num = num[train_indices]
+    train_mask = num_mask[train_indices].astype(bool, copy=False)
+    for feature_index in range(n_features):
+        valid = train_mask[:, feature_index]
+        if not valid.any():
+            continue
+
+        values = train_num[valid, feature_index].astype(np.float64, copy=False)
+        mean = float(values.mean())
+        std = float(values.std())
+        if not np.isfinite(std) or std == 0.0:
+            std = 1.0
+
+        means[feature_index] = mean
+        stds[feature_index] = std
+
+    return NumericNormalization(means=means, stds=stds)
+
+
+def apply_num_normalization(
+    num: np.ndarray,
+    num_mask: np.ndarray,
+    normalization: NumericNormalization,
+) -> np.ndarray:
+    """Apply z-score normalization and keep masked numerical values at 0.0."""
+    if num.shape[1] == 0:
+        return num.astype(np.float32, copy=True)
+
+    normalized = (
+        num.astype(np.float32, copy=True)
+        - normalization.means.astype(np.float32)
+    ) / normalization.stds.astype(np.float32)
+    normalized[~num_mask.astype(bool, copy=False)] = 0.0
+    return normalized.astype(np.float32, copy=False)
+
+
+def normalize_preprocessed_table(
+    table: PreprocessedTable,
+    train_indices: np.ndarray,
+) -> tuple[PreprocessedTable, NumericNormalization]:
+    normalization = fit_num_normalization(table.num, table.num_mask, train_indices)
+    normalized = PreprocessedTable(
+        num=apply_num_normalization(table.num, table.num_mask, normalization),
+        num_mask=table.num_mask,
+        cat=table.cat,
+        cat_mask=table.cat_mask,
+        num_features=table.num_features,
+        cat_features=table.cat_features,
+        cat_cardinalities=table.cat_cardinalities,
+    )
+    return normalized, normalization
+
+
+def _save_split_array(
+    output_dir: Path,
+    prefix: str,
+    array: np.ndarray,
+    split_indices: dict[str, np.ndarray],
 ) -> None:
-    """Save preprocessed target value/mask arrays and memo files."""
+    for split_name in SPLIT_NAMES:
+        np.save(output_dir / f"{prefix}_{split_name}.npy", array[split_indices[split_name]])
+
+
+def _remove_stale_preprocessed_files(output_dir: Path) -> None:
+    stale_names = [
+        "source_array.npy",
+        "source_mask.npy",
+        "source_columns.csv",
+        "source_mask_columns.csv",
+        "source_quantile_lookup.csv",
+        "source_raw_value_summary.csv",
+        "target_array.npy",
+        "target_mask.npy",
+        "target_columns.csv",
+        "target_mask_columns.csv",
+        "target_quantile_lookup.csv",
+        "target_raw_value_summary.csv",
+    ]
+    for name in stale_names:
+        path = output_dir / name
+        if path.exists():
+            path.unlink()
+
+
+def build_info(
+    source: PreprocessedTable,
+    target: PreprocessedTable,
+    split_indices: dict[str, np.ndarray],
+    source_num_normalization: NumericNormalization,
+    target_num_normalization: NumericNormalization,
+) -> dict[str, object]:
+    return {
+        "name": "knhanes",
+        "id": "knhanes",
+        "task_type": "conditional_generation",
+        "num_normalization": "z_score",
+        "num_normalization_fit": "train",
+        "num_normalization_valid_mask_only": True,
+        "num_masked_value": 0.0,
+        "train_size": int(len(split_indices["train"])),
+        "val_size": int(len(split_indices["val"])),
+        "test_size": int(len(split_indices["test"])),
+        "n_source_num_features": len(source.num_features),
+        "n_source_cat_features": len(source.cat_features),
+        "n_target_num_features": len(target.num_features),
+        "n_target_cat_features": len(target.cat_features),
+        "source_num_features": source.num_features,
+        "source_cat_features": source.cat_features,
+        "target_num_features": target.num_features,
+        "target_cat_features": target.cat_features,
+        "source_cat_cardinalities": source.cat_cardinalities,
+        "target_cat_cardinalities": target.cat_cardinalities,
+        "source_num_means": source_num_normalization.means.tolist(),
+        "source_num_stds": source_num_normalization.stds.tolist(),
+        "target_num_means": target_num_normalization.means.tolist(),
+        "target_num_stds": target_num_normalization.stds.tolist(),
+    }
+
+
+def save_preprocessed(
+    processed_source: PreprocessedTable,
+    processed_target: PreprocessedTable,
+    output_dir: str | Path,
+    split_indices: dict[str, np.ndarray],
+    source_num_normalization: NumericNormalization,
+    target_num_normalization: NumericNormalization,
+) -> None:
+    """Save preprocessed arrays and dataset info."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    target_mask = processed_target.attrs.get(
-        "mask",
-        pd.DataFrame(index=processed_target.index),
-    )
+    _remove_stale_preprocessed_files(output_dir)
 
-    np.save(output_dir / "target_array.npy", processed_target.to_numpy(dtype=np.float32))
-    np.save(output_dir / "target_mask.npy", target_mask.to_numpy(dtype=np.float32))
-    _write_preprocess_csv(
-        processed_target.attrs.get("column_info", pd.DataFrame()),
-        output_dir / "target_columns.csv",
+    _save_split_array(output_dir, "source_num", processed_source.num, split_indices)
+    _save_split_array(output_dir, "source_num_mask", processed_source.num_mask, split_indices)
+    _save_split_array(output_dir, "source_cat", processed_source.cat, split_indices)
+    _save_split_array(output_dir, "source_cat_mask", processed_source.cat_mask, split_indices)
+    _save_split_array(output_dir, "target_num", processed_target.num, split_indices)
+    _save_split_array(output_dir, "target_num_mask", processed_target.num_mask, split_indices)
+    _save_split_array(output_dir, "target_cat", processed_target.cat, split_indices)
+    _save_split_array(output_dir, "target_cat_mask", processed_target.cat_mask, split_indices)
+
+    info = build_info(
+        processed_source,
+        processed_target,
+        split_indices,
+        source_num_normalization,
+        target_num_normalization,
     )
-    _write_preprocess_csv(
-        processed_target.attrs.get("mask_info", pd.DataFrame()),
-        output_dir / "target_mask_columns.csv",
-    )
-    for stale_file in [
-        output_dir / "target_quantile_lookup.csv",
-        output_dir / "target_raw_value_summary.csv",
-    ]:
-        if stale_file.exists():
-            stale_file.unlink()
+    with open(output_dir / "info.json", "w", encoding="utf-8") as f:
+        json.dump(info, f, ensure_ascii=False, indent=2)
+        f.write("\n")
 
 
 def validate_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -691,15 +788,42 @@ def main() -> None:
             print(f"{report_name}: {report['status'].value_counts().to_dict()}")
 
     processed_source = preprocess_source_dataset(dataset, source_metadata)
-    save_preprocessed_source(processed_source, "preprocessed")
-    print(f"Preprocessed source shape: {processed_source.shape}")
-    print("Saved preprocessed source files to: preprocessed")
-
     if target_metadata is not None:
         processed_target = preprocess_target_dataset(dataset, target_metadata)
-        save_preprocessed_target(processed_target, "preprocessed")
-        print(f"Preprocessed target shape: {processed_target.shape}")
-        print("Saved preprocessed target files to: preprocessed")
+    else:
+        processed_target = preprocess_target_dataset(dataset, metadata.iloc[0:0].copy())
+
+    split_seed = int(config.get("split_seed", DEFAULT_SPLIT_SEED))
+    split_indices = make_split_indices(len(dataset), DEFAULT_SPLIT_RATIOS, split_seed)
+    processed_source, source_num_normalization = normalize_preprocessed_table(
+        processed_source,
+        split_indices["train"],
+    )
+    processed_target, target_num_normalization = normalize_preprocessed_table(
+        processed_target,
+        split_indices["train"],
+    )
+    output_dir = config.get("output_dir", "preprocessed")
+    save_preprocessed(
+        processed_source,
+        processed_target,
+        output_dir,
+        split_indices,
+        source_num_normalization,
+        target_num_normalization,
+    )
+
+    print(f"Preprocessed source num shape: {processed_source.num.shape}")
+    print(f"Preprocessed source cat shape: {processed_source.cat.shape}")
+    print(f"Preprocessed target num shape: {processed_target.num.shape}")
+    print(f"Preprocessed target cat shape: {processed_target.cat.shape}")
+    print(
+        "Split sizes: "
+        f"train={len(split_indices['train'])}, "
+        f"val={len(split_indices['val'])}, "
+        f"test={len(split_indices['test'])}"
+    )
+    print(f"Saved preprocessed files to: {output_dir}")
 
 
 if __name__ == "__main__":

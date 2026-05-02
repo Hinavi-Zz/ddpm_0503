@@ -27,3 +27,5 @@ metadata_path: metadata.csv
 skip_years_path: skip_years.csv
 source_variables_path: source_variables.txt
 target_variables_path: target_variables.txt
+output_dir: preprocessed
+split_seed: 42
