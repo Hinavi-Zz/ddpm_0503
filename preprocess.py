@@ -28,9 +28,12 @@ class PreprocessedTable:
 
 
 @dataclass(frozen=True)
-class NumericNormalization:
-    means: np.ndarray
-    stds: np.ndarray
+class NumericPercentileNormalization:
+    sorted_values: list[np.ndarray]
+
+    @property
+    def train_counts(self) -> list[int]:
+        return [int(len(values)) for values in self.sorted_values]
 
 
 def load_sas7bdat(path: str | Path) -> pd.DataFrame:
@@ -145,6 +148,43 @@ def filter_metadata(metadata: pd.DataFrame, variables: list[str]) -> pd.DataFram
     filtered["_variable_order"] = filtered["variable_name"].map(variable_index)
     filtered = filtered.sort_values("_variable_order").drop(columns="_variable_order")
     return filtered.reset_index(drop=True)
+
+
+def _deduplicate_preserve_order(values: list[str]) -> list[str]:
+    deduplicated = []
+    seen = set()
+    for value in values:
+        if value in seen:
+            continue
+        deduplicated.append(value)
+        seen.add(value)
+    return deduplicated
+
+
+def select_metadata(metadata: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Select variables as one table, without source/target roles."""
+    variables_path = config.get("variables_path")
+    variable_paths = config.get("variable_paths")
+    if variables_path and variable_paths:
+        raise ValueError("Use only one of variables_path or variable_paths.")
+
+    variables: list[str] = []
+    if variables_path:
+        variables.extend(load_variable_list(variables_path))
+    elif variable_paths:
+        if isinstance(variable_paths, (str, Path)):
+            variable_paths = [variable_paths]
+        for path in variable_paths:
+            variables.extend(load_variable_list(path))
+    else:
+        for legacy_key in ("source_variables_path", "target_variables_path"):
+            if path := config.get(legacy_key):
+                variables.extend(load_variable_list(path))
+
+    if not variables:
+        return metadata
+
+    return filter_metadata(metadata, _deduplicate_preserve_order(variables))
 
 
 def infer_dataset_year(path: str | Path) -> int:
@@ -377,16 +417,6 @@ def preprocess_dataset(
     )
 
 
-def preprocess_source_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> PreprocessedTable:
-    """Preprocess source variables into numerical/categorical arrays and masks."""
-    return preprocess_dataset(dataset, metadata, "source")
-
-
-def preprocess_target_dataset(dataset: pd.DataFrame, metadata: pd.DataFrame) -> PreprocessedTable:
-    """Preprocess target variables into numerical/categorical arrays and masks."""
-    return preprocess_dataset(dataset, metadata, "target")
-
-
 def make_split_indices(
     n_rows: int,
     ratios: tuple[float, float, float] = DEFAULT_SPLIT_RATIOS,
@@ -417,54 +447,61 @@ def fit_num_normalization(
     num: np.ndarray,
     num_mask: np.ndarray,
     train_indices: np.ndarray,
-) -> NumericNormalization:
-    """Fit z-score constants from train valid values only."""
+) -> NumericPercentileNormalization:
+    """Fit empirical percentile distributions from train valid values only."""
     n_features = num.shape[1]
-    means = np.zeros(n_features, dtype=np.float64)
-    stds = np.ones(n_features, dtype=np.float64)
-    if n_features == 0 or len(train_indices) == 0:
-        return NumericNormalization(means=means, stds=stds)
+    sorted_values: list[np.ndarray] = []
+    if n_features == 0:
+        return NumericPercentileNormalization(sorted_values=sorted_values)
+    if len(train_indices) == 0:
+        return NumericPercentileNormalization(
+            sorted_values=[np.empty(0, dtype=np.float64) for _ in range(n_features)]
+        )
 
     train_num = num[train_indices]
     train_mask = num_mask[train_indices].astype(bool, copy=False)
     for feature_index in range(n_features):
         valid = train_mask[:, feature_index]
         if not valid.any():
+            sorted_values.append(np.empty(0, dtype=np.float64))
             continue
 
         values = train_num[valid, feature_index].astype(np.float64, copy=False)
-        mean = float(values.mean())
-        std = float(values.std())
-        if not np.isfinite(std) or std == 0.0:
-            std = 1.0
+        values = values[np.isfinite(values)]
+        sorted_values.append(np.sort(values))
 
-        means[feature_index] = mean
-        stds[feature_index] = std
-
-    return NumericNormalization(means=means, stds=stds)
+    return NumericPercentileNormalization(sorted_values=sorted_values)
 
 
 def apply_num_normalization(
     num: np.ndarray,
     num_mask: np.ndarray,
-    normalization: NumericNormalization,
+    normalization: NumericPercentileNormalization,
 ) -> np.ndarray:
-    """Apply z-score normalization and keep masked numerical values at 0.0."""
+    """Apply percentile rank normalization and keep masked numerical values at 0.0."""
     if num.shape[1] == 0:
         return num.astype(np.float32, copy=True)
 
-    normalized = (
-        num.astype(np.float32, copy=True)
-        - normalization.means.astype(np.float32)
-    ) / normalization.stds.astype(np.float32)
-    normalized[~num_mask.astype(bool, copy=False)] = 0.0
-    return normalized.astype(np.float32, copy=False)
+    normalized = np.zeros(num.shape, dtype=np.float32)
+    valid_mask = num_mask.astype(bool, copy=False)
+    for feature_index, train_values in enumerate(normalization.sorted_values):
+        valid = valid_mask[:, feature_index]
+        if not valid.any() or len(train_values) == 0:
+            continue
+
+        values = num[valid, feature_index].astype(np.float64, copy=False)
+        lower = np.searchsorted(train_values, values, side="left")
+        upper = np.searchsorted(train_values, values, side="right")
+        percentile = (lower + upper) / (2.0 * len(train_values))
+        normalized[valid, feature_index] = np.clip(percentile, 0.0, 1.0).astype(np.float32)
+
+    return normalized
 
 
 def normalize_preprocessed_table(
     table: PreprocessedTable,
     train_indices: np.ndarray,
-) -> tuple[PreprocessedTable, NumericNormalization]:
+) -> tuple[PreprocessedTable, NumericPercentileNormalization]:
     normalization = fit_num_normalization(table.num, table.num_mask, train_indices)
     normalized = PreprocessedTable(
         num=apply_num_normalization(table.num, table.num_mask, normalization),
@@ -502,7 +539,23 @@ def _remove_stale_preprocessed_files(output_dir: Path) -> None:
         "target_mask_columns.csv",
         "target_quantile_lookup.csv",
         "target_raw_value_summary.csv",
+        "num_percentile_lookup.npz",
     ]
+    legacy_split_prefixes = (
+        "source_num",
+        "source_num_mask",
+        "source_cat",
+        "source_cat_mask",
+        "target_num",
+        "target_num_mask",
+        "target_cat",
+        "target_cat_mask",
+    )
+    stale_names.extend(
+        f"{prefix}_{split_name}.npy"
+        for prefix in legacy_split_prefixes
+        for split_name in SPLIT_NAMES
+    )
     for name in stale_names:
         path = output_dir / name
         if path.exists():
@@ -510,68 +563,68 @@ def _remove_stale_preprocessed_files(output_dir: Path) -> None:
 
 
 def build_info(
-    source: PreprocessedTable,
-    target: PreprocessedTable,
+    table: PreprocessedTable,
     split_indices: dict[str, np.ndarray],
-    source_num_normalization: NumericNormalization,
-    target_num_normalization: NumericNormalization,
+    num_normalization: NumericPercentileNormalization,
 ) -> dict[str, object]:
     return {
         "name": "knhanes",
         "id": "knhanes",
-        "task_type": "conditional_generation",
-        "num_normalization": "z_score",
+        "task_type": "tabular_generation",
+        "num_normalization": "percentile",
         "num_normalization_fit": "train",
         "num_normalization_valid_mask_only": True,
+        "num_percentile_range": [0.0, 1.0],
+        "num_percentile_tie_strategy": "average_rank",
+        "num_percentile_lookup_file": "num_percentile_lookup.npz",
+        "num_percentile_lookup_key_format": "num_{feature_index}",
         "num_masked_value": 0.0,
         "train_size": int(len(split_indices["train"])),
         "val_size": int(len(split_indices["val"])),
         "test_size": int(len(split_indices["test"])),
-        "n_source_num_features": len(source.num_features),
-        "n_source_cat_features": len(source.cat_features),
-        "n_target_num_features": len(target.num_features),
-        "n_target_cat_features": len(target.cat_features),
-        "source_num_features": source.num_features,
-        "source_cat_features": source.cat_features,
-        "target_num_features": target.num_features,
-        "target_cat_features": target.cat_features,
-        "source_cat_cardinalities": source.cat_cardinalities,
-        "target_cat_cardinalities": target.cat_cardinalities,
-        "source_num_means": source_num_normalization.means.tolist(),
-        "source_num_stds": source_num_normalization.stds.tolist(),
-        "target_num_means": target_num_normalization.means.tolist(),
-        "target_num_stds": target_num_normalization.stds.tolist(),
+        "n_num_features": len(table.num_features),
+        "n_cat_features": len(table.cat_features),
+        "num_features": table.num_features,
+        "cat_features": table.cat_features,
+        "cat_cardinalities": table.cat_cardinalities,
+        "num_percentile_train_counts": num_normalization.train_counts,
     }
 
 
+def _save_num_percentile_lookup(
+    output_dir: Path,
+    num_normalization: NumericPercentileNormalization,
+) -> None:
+    np.savez_compressed(
+        output_dir / "num_percentile_lookup.npz",
+        **{
+            f"num_{feature_index}": values.astype(np.float32, copy=False)
+            for feature_index, values in enumerate(num_normalization.sorted_values)
+        },
+    )
+
+
 def save_preprocessed(
-    processed_source: PreprocessedTable,
-    processed_target: PreprocessedTable,
+    processed: PreprocessedTable,
     output_dir: str | Path,
     split_indices: dict[str, np.ndarray],
-    source_num_normalization: NumericNormalization,
-    target_num_normalization: NumericNormalization,
+    num_normalization: NumericPercentileNormalization,
 ) -> None:
     """Save preprocessed arrays and dataset info."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     _remove_stale_preprocessed_files(output_dir)
 
-    _save_split_array(output_dir, "source_num", processed_source.num, split_indices)
-    _save_split_array(output_dir, "source_num_mask", processed_source.num_mask, split_indices)
-    _save_split_array(output_dir, "source_cat", processed_source.cat, split_indices)
-    _save_split_array(output_dir, "source_cat_mask", processed_source.cat_mask, split_indices)
-    _save_split_array(output_dir, "target_num", processed_target.num, split_indices)
-    _save_split_array(output_dir, "target_num_mask", processed_target.num_mask, split_indices)
-    _save_split_array(output_dir, "target_cat", processed_target.cat, split_indices)
-    _save_split_array(output_dir, "target_cat_mask", processed_target.cat_mask, split_indices)
+    _save_split_array(output_dir, "num", processed.num, split_indices)
+    _save_split_array(output_dir, "num_mask", processed.num_mask, split_indices)
+    _save_split_array(output_dir, "cat", processed.cat, split_indices)
+    _save_split_array(output_dir, "cat_mask", processed.cat_mask, split_indices)
+    _save_num_percentile_lookup(output_dir, num_normalization)
 
     info = build_info(
-        processed_source,
-        processed_target,
+        processed,
         split_indices,
-        source_num_normalization,
-        target_num_normalization,
+        num_normalization,
     )
     with open(output_dir / "info.json", "w", encoding="utf-8") as f:
         json.dump(info, f, ensure_ascii=False, indent=2)
@@ -746,30 +799,12 @@ def main() -> None:
 
     dataset = load_datasets(dataset_paths, config.get("skip_years_path"))
     metadata = load_metadata(config["metadata_path"])
-    source_metadata = metadata
-    source_variables_path = config.get("source_variables_path")
-    if source_variables_path:
-        source_variables = load_variable_list(source_variables_path)
-        source_metadata = filter_metadata(metadata, source_variables)
-
-    target_metadata = None
-    target_variables_path = config.get("target_variables_path")
-    if target_variables_path:
-        target_variables = load_variable_list(target_variables_path)
-        target_metadata = filter_metadata(metadata, target_variables)
+    selected_metadata = select_metadata(metadata, config)
 
     print(f"Loaded dataset shape: {dataset.shape}")
-    print(f"Selected source variables: {len(source_metadata)}")
-    if target_metadata is not None:
-        print(f"Selected target variables: {len(target_metadata)}")
+    print(f"Selected variables: {len(selected_metadata)}")
     if args.validate:
-        validation_metadata = source_metadata
-        if target_metadata is not None:
-            validation_metadata = pd.concat(
-                [source_metadata, target_metadata],
-                ignore_index=True,
-            ).drop_duplicates("variable_name")
-        reports = validate_dataset(dataset, validation_metadata)
+        reports = validate_dataset(dataset, selected_metadata)
 
         reports["categorical"].to_csv(
             "categorical_validation_report.csv",
@@ -787,36 +822,24 @@ def main() -> None:
         for report_name, report in reports.items():
             print(f"{report_name}: {report['status'].value_counts().to_dict()}")
 
-    processed_source = preprocess_source_dataset(dataset, source_metadata)
-    if target_metadata is not None:
-        processed_target = preprocess_target_dataset(dataset, target_metadata)
-    else:
-        processed_target = preprocess_target_dataset(dataset, metadata.iloc[0:0].copy())
+    processed = preprocess_dataset(dataset, selected_metadata)
 
     split_seed = int(config.get("split_seed", DEFAULT_SPLIT_SEED))
     split_indices = make_split_indices(len(dataset), DEFAULT_SPLIT_RATIOS, split_seed)
-    processed_source, source_num_normalization = normalize_preprocessed_table(
-        processed_source,
-        split_indices["train"],
-    )
-    processed_target, target_num_normalization = normalize_preprocessed_table(
-        processed_target,
+    processed, num_normalization = normalize_preprocessed_table(
+        processed,
         split_indices["train"],
     )
     output_dir = config.get("output_dir", "preprocessed")
     save_preprocessed(
-        processed_source,
-        processed_target,
+        processed,
         output_dir,
         split_indices,
-        source_num_normalization,
-        target_num_normalization,
+        num_normalization,
     )
 
-    print(f"Preprocessed source num shape: {processed_source.num.shape}")
-    print(f"Preprocessed source cat shape: {processed_source.cat.shape}")
-    print(f"Preprocessed target num shape: {processed_target.num.shape}")
-    print(f"Preprocessed target cat shape: {processed_target.cat.shape}")
+    print(f"Preprocessed num shape: {processed.num.shape}")
+    print(f"Preprocessed cat shape: {processed.cat.shape}")
     print(
         "Split sizes: "
         f"train={len(split_indices['train'])}, "

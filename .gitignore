@@ -10,6 +10,7 @@ env/
 datasets/*.sas7bdat
 
 preprocessed/*.npy
+preprocessed/*.npz
 
 .DS_Store
 Thumbs.db

@@ -25,7 +25,6 @@ datasets:
     path: datasets/hn24_all.sas7bdat
 metadata_path: metadata.csv
 skip_years_path: skip_years.csv
-source_variables_path: source_variables.txt
-target_variables_path: target_variables.txt
+variables_path: variables.txt
 output_dir: preprocessed
 split_seed: 42
