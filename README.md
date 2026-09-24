@@ -150,3 +150,5 @@ for split in ["train", "val", "test"]:
 ```
 
 The preprocessing is consistent when every value array and its matching mask array have the same shape for each split.
+
+# note: minor cleanup
